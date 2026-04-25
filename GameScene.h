@@ -2,102 +2,89 @@
 #define GAMESCENE_H
 
 #include <QGraphicsScene>
-#include <QTimer>
-#include <QLabel>
-#include <QProgressBar>
-#include "RoleItem.h"
-#include "CipherMachineItem.h"
-#include "GateItem.h"
+#include <QList>
+#include <QPointF>
+#include <QGraphicsItem>
+#include "GameConfig.h"
 
-enum class GamePhase {
-    Preparation,
-    Decoding,
-    Escape,
-    Settlement
+// 前向声明
+class Character;
+class Obstacle;
+class Bush;
+
+// 简单的障碍物类
+
+class Obstacle : public QGraphicsRectItem
+{
+public:
+    enum Type { Wall, Box, Board };
+    explicit Obstacle(const QRectF &rect, Type type, QGraphicsItem *parent = nullptr);
+    Type obstacleType() const { return m_type; }
+private:
+    Type m_type;
+};
+
+// 草丛类
+class Bush : public QObject, public QGraphicsRectItem
+{
+    Q_OBJECT
+    Q_PROPERTY(QPointF pos READ pos WRITE setPos)
+public:
+    explicit Bush(const QRectF &rect, QGraphicsItem *parent = nullptr);
+    void shake();
+    void setContainsSurvivor(bool contains);
+    bool containsSurvivor() const { return m_containsSurvivor; }
+private:
+    bool m_containsSurvivor;
 };
 
 class GameScene : public QGraphicsScene
 {
     Q_OBJECT
+
 public:
     explicit GameScene(QObject *parent = nullptr);
-    ~GameScene();
 
-    // 键盘/鼠标事件入口（由 MainWindow 调用）
-    void handleKeyPress(int key);
-    void handleKeyRelease(int key);
-    void handleMousePress(Qt::MouseButton button, const QPointF &pos);
+    // 创建地图固定元素（障碍物、草丛）——由 GameEngine 初始化时调用
+    void createObstaclesAndBushes();
 
-    // 玩家角色
-    RoleItem *player() const { return m_player; }
+    // 获取所有障碍物（用于碰撞检测）
+    const QList<QGraphicsItem*>& getObstacles() const { return m_obstacles; }
 
-    // 设置 UI 控件（由 MainWindow 传入）
-    void setUIWidgets(QLabel *phaseLabel, QLabel *cipherLabel,
-                      QLabel *timerLabel, QProgressBar *interactProgress);
+    // 获取所有草丛（用于晃动、隐身等逻辑）
+    const QList<Bush*>& getBushes() const { return m_bushes; }
 
-signals:
-    void gameMessage(const QString &msg);
-    void phaseChanged(GamePhase phase);
-    void gameOver(bool survivorWin);   // true=求生者胜，false=监管者胜
+    // 检查点是否在障碍物内
+    bool isPointInsideObstacle(const QPointF &point) const;
 
-public slots:
-    void updateGame();     // 每帧调用
-    void updateAI();       // 每 200ms 调用
+    // 线段与障碍物是否相交（用于攻击射线检测）
+    bool lineIntersectsObstacle(const QPointF &p1, const QPointF &p2) const;
 
-private slots:
-    void onCipherCompleted();   // 密码机完成时触发
+    // 获取指定点附近的草丛
+    Bush* getBushAt(const QPointF &point, qreal maxDistance = 10.0) const;
+
+    // 获取指定范围内的所有草丛
+    QList<Bush*> getBushesInRadius(const QPointF &center, qreal radius) const;
+
+    // 设置玩家角色（用于键盘事件转发）
+    void setPlayerCharacter(Character *player);
+
+    // 获取指定圆心、半径范围内的所有障碍物
+    QList<QGraphicsItem*> getObstaclesInRadius(const QPointF &center, qreal radius) const;
+
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void keyReleaseEvent(QKeyEvent *event) override;
 
 private:
-    // --- 键盘状态 ---
-    bool m_keyUp, m_keyDown, m_keyLeft, m_keyRight;
-    bool m_keySpace;
-    bool m_keyF;
+    void addObstacle(const QPointF &pos, const QSizeF &size, Obstacle::Type type);
+    void addBush(const QPointF &pos, const QSizeF &size);
 
-    // --- 定时器 ---
-    QTimer *m_gameTimer;   // 16ms 帧循环
-    QTimer *m_aiTimer;     // 200ms AI 决策
+    QList<QGraphicsItem*> m_obstacles;   // 障碍物列表（墙壁、箱子、板区）
+    QList<Bush*> m_bushes;               // 草丛列表
 
-    // --- 角色 ---
-    QList<RoleItem*> m_allRoles;
-    RoleItem *m_player;    // 玩家控制的求生者
-    RoleItem *m_hunter;    // 监管者（AI）
-
-    // --- 游戏阶段 ---
-    GamePhase m_gamePhase;
-    int m_phaseTimer;      // 阶段倒计时（帧计数，后续完善）
-
-    // --- 第3步：密码机与大门 ---
-    QList<CipherMachineItem*> m_cipherMachines;
-    QList<GateItem*> m_gates;
-    int m_completedCiphers;
-
-    // --- 第3步：交互系统 ---
-    RoleItem *m_interactingSurvivor;   // 当前正在交互的求生者（目前仅玩家）
-    CipherMachineItem *m_currentCipher;
-    GateItem *m_currentGate;
-    qreal m_interactProgress;          // 0~100
-    qreal m_interactSpeed;             // 每帧增加量
-
-    // --- 第3步：UI 控件指针 ---
-    QLabel *m_phaseLabel;
-    QLabel *m_cipherLabel;
-    QLabel *m_timerLabel;
-    QProgressBar *m_interactProgressBar;
-
-    // --- 初始化 ---
-    void initScene();
-    void initCipherMachines();
-    void initGates();
-
-    // --- 第3步：交互处理函数 ---
-    void handleInteraction();
-    void startDecoding(CipherMachineItem *cipher);
-    void startOpeningGate(GateItem *gate);
-    void stopInteracting();
-    void updateInteractProgress();
-
-    // 场景边界
-    QRectF sceneBounds() const { return sceneRect(); }
+    Character *m_playerCharacter;        // 玩家角色指针（用于事件转发）
 };
+
 
 #endif // GAMESCENE_H

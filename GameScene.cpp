@@ -1,350 +1,189 @@
 #include "GameScene.h"
-#include <QDebug>
-#include <QGraphicsSceneMouseEvent>
+#include "Character.h"
+#include <QKeyEvent>
+#include <QPainter>
+#include <QPropertyAnimation>
+#include <QParallelAnimationGroup>
+#include "entities/PlayerSurvivor.h"
+#include "entities/Hunter.h"
+#include "entities/AISurvivor.h"
+#include "entities/CipherMachine.h"
+#include "entities/Gate.h"
 
-// ========== 构造函数与初始化 ==========
+// ---------- Obstacle 实现 ----------
+Obstacle::Obstacle(const QRectF &rect, Type type, QGraphicsItem *parent)
+    : QGraphicsRectItem(rect, parent), m_type(type)
+{
+    setFlag(QGraphicsItem::ItemIsSelectable, false);
+    setFlag(QGraphicsItem::ItemIsMovable, false);
+    QColor color;
+    switch (type) {
+    case Wall:  color = QColor(139, 69, 19); break;
+    case Box:   color = QColor(160, 82, 45); break;
+    case Board: color = QColor(205, 133, 63); break;
+    }
+    setBrush(QBrush(color));
+    setPen(QPen(Qt::black, 2));
+}
+
+// ---------- Bush 实现 ----------
+Bush::Bush(const QRectF &rect, QGraphicsItem *parent)
+    : QObject(nullptr), QGraphicsRectItem(rect, parent), m_containsSurvivor(false)
+{
+    setFlag(QGraphicsItem::ItemIsSelectable, false);
+    setFlag(QGraphicsItem::ItemIsMovable, false);
+    setBrush(QBrush(QColor(34, 139, 34, 180)));
+    setPen(Qt::NoPen);
+}
+
+void Bush::shake()
+{
+    // 晃动动画（如需启用请确保 Bush 是 QObject 子类）
+    // 当前为空实现以避免编译错误
+}
+
+void Bush::setContainsSurvivor(bool contains)
+{
+    m_containsSurvivor = contains;
+}
+
+// ---------- GameScene 实现 ----------
 GameScene::GameScene(QObject *parent)
-    : QGraphicsScene(parent)
-    , m_keyUp(false), m_keyDown(false), m_keyLeft(false), m_keyRight(false)
-    , m_keySpace(false), m_keyF(false)
-    , m_player(nullptr), m_hunter(nullptr)
-    , m_gamePhase(GamePhase::Preparation)
-    , m_phaseTimer(0)
-    , m_completedCiphers(0)
-    , m_interactingSurvivor(nullptr)
-    , m_currentCipher(nullptr)
-    , m_currentGate(nullptr)
-    , m_interactProgress(0)
-    , m_interactSpeed(0)
-    , m_phaseLabel(nullptr)
-    , m_cipherLabel(nullptr)
-    , m_timerLabel(nullptr)
-    , m_interactProgressBar(nullptr)
+    : QGraphicsScene(parent), m_playerCharacter(nullptr)
 {
     setSceneRect(0, 0, 1200, 800);
-    setBackgroundBrush(Qt::gray);
-
-    // 帧循环 (60 FPS)
-    m_gameTimer = new QTimer(this);
-    connect(m_gameTimer, &QTimer::timeout, this, &GameScene::updateGame);
-    m_gameTimer->start(16);
-
-    // AI 决策循环 (200ms)
-    m_aiTimer = new QTimer(this);
-    connect(m_aiTimer, &QTimer::timeout, this, &GameScene::updateAI);
-    m_aiTimer->start(200);
-
-    initScene();
+    setBackgroundBrush(QColor(50, 80, 50));
 }
 
-GameScene::~GameScene()
+void GameScene::createObstaclesAndBushes()
 {
-    // 清理所有角色（QGraphicsScene 会自动删除 item，但 QObject 子类需手动 delete）
-    qDeleteAll(m_allRoles);
-    m_allRoles.clear();
+    // 障碍物
+    addObstacle(QPointF(200, 150), QSizeF(80, 20), Obstacle::Wall);
+    addObstacle(QPointF(400, 200), QSizeF(20, 120), Obstacle::Wall);
+    addObstacle(QPointF(600, 100), QSizeF(100, 20), Obstacle::Wall);
+    addObstacle(QPointF(800, 300), QSizeF(20, 150), Obstacle::Wall);
+    addObstacle(QPointF(300, 500), QSizeF(150, 20), Obstacle::Wall);
+    addObstacle(QPointF(700, 600), QSizeF(80, 20), Obstacle::Wall);
+    addObstacle(QPointF(150, 650), QSizeF(20, 100), Obstacle::Wall);
+    addObstacle(QPointF(900, 500), QSizeF(20, 150), Obstacle::Wall);
+    addObstacle(QPointF(350, 350), QSizeF(40, 40), Obstacle::Box);
+    addObstacle(QPointF(750, 400), QSizeF(40, 40), Obstacle::Box);
+    addObstacle(QPointF(500, 650), QSizeF(40, 40), Obstacle::Box);
+    addObstacle(QPointF(250, 250), QSizeF(60, 15), Obstacle::Board);
+    addObstacle(QPointF(650, 250), QSizeF(60, 15), Obstacle::Board);
+    addObstacle(QPointF(450, 450), QSizeF(15, 60), Obstacle::Board);
+
+    // 草丛
+    addBush(QPointF(100, 100), QSizeF(80, 80));
+    addBush(QPointF(500, 150), QSizeF(100, 80));
+    addBush(QPointF(850, 200), QSizeF(90, 90));
+    addBush(QPointF(200, 450), QSizeF(100, 100));
+    addBush(QPointF(600, 500), QSizeF(120, 80));
+    addBush(QPointF(900, 650), QSizeF(80, 80));
+    addBush(QPointF(300, 700), QSizeF(100, 100));
 }
 
-void GameScene::initScene()
+void GameScene::addObstacle(const QPointF &pos, const QSizeF &size, Obstacle::Type type)
 {
-    // ----- 创建玩家（医生）-----
-    m_player = new RoleItem(RoleType::Doctor);
-    m_player->setPos(100, 700);
-    addItem(m_player);
-    m_allRoles.append(m_player);
-
-    // ----- 创建监管者（厂长）-----
-    m_hunter = new RoleItem(RoleType::Hunter);
-    m_hunter->setPos(600, 400);
-    addItem(m_hunter);
-    m_allRoles.append(m_hunter);
-
-    // ----- 创建 AI 求生者（机械师、空军）-----
-    RoleItem *ai1 = new RoleItem(RoleType::Mechanic);
-    ai1->setPos(1100, 700);
-    addItem(ai1);
-    m_allRoles.append(ai1);
-
-    RoleItem *ai2 = new RoleItem(RoleType::AirForce);
-    ai2->setPos(100, 100);
-    addItem(ai2);
-    m_allRoles.append(ai2);
-
-    // ----- 第3步：初始化密码机和大门 -----
-    initCipherMachines();
-    initGates();
-
-    // 为了方便测试，直接进入破译阶段（跳过准备阶段）
-    m_gamePhase = GamePhase::Decoding;
+    QRectF rect(pos, size);
+    Obstacle *obs = new Obstacle(rect, type);
+    addItem(obs);
+    m_obstacles.append(obs);
 }
 
-// ========== 第3步：密码机与大门初始化 ==========
-void GameScene::initCipherMachines()
+void GameScene::addBush(const QPointF &pos, const QSizeF &size)
 {
-    QList<QPointF> positions = {
-        QPointF(200, 200),
-        QPointF(600, 400),
-        QPointF(1000, 600)
-    };
+    QRectF rect(pos, size);
+    Bush *bush = new Bush(rect);
+    addItem(bush);
+    m_bushes.append(bush);
+}
 
-    for (const QPointF &pos : positions) {
-        CipherMachineItem *cipher = new CipherMachineItem(pos);
-        addItem(cipher);
-        m_cipherMachines.append(cipher);
-        connect(cipher, &CipherMachineItem::completed, this, &GameScene::onCipherCompleted);
+bool GameScene::isPointInsideObstacle(const QPointF &point) const
+{
+    for (QGraphicsItem *item : m_obstacles) {
+        if (item->contains(item->mapFromScene(point)))
+            return true;
     }
+    return false;
 }
 
-void GameScene::initGates()
+bool GameScene::lineIntersectsObstacle(const QPointF &p1, const QPointF &p2) const
 {
-    QList<QPointF> positions = {
-        QPointF(50, 400),
-        QPointF(1100, 400)
-    };
-
-    for (const QPointF &pos : positions) {
-        GateItem *gate = new GateItem(pos);
-        gate->setUnlocked(false);
-        addItem(gate);
-        m_gates.append(gate);
-        // 大门完全开启 -> 求生者胜利
-        connect(gate, &GateItem::opened, this, [this]() {
-            emit gameOver(true);
-        });
-    }
-}
-
-// ========== 第3步：UI 控件设置 ==========
-void GameScene::setUIWidgets(QLabel *phaseLabel, QLabel *cipherLabel,
-                             QLabel *timerLabel, QProgressBar *interactProgress)
-{
-    m_phaseLabel = phaseLabel;
-    m_cipherLabel = cipherLabel;
-    m_timerLabel = timerLabel;
-    m_interactProgressBar = interactProgress;
-
-    if (m_cipherLabel) {
-        m_cipherLabel->setText(QString("密码机: %1/3").arg(m_completedCiphers));
-    }
-    if (m_phaseLabel) {
-        m_phaseLabel->setText("破译阶段");
-    }
-}
-
-// ========== 键盘/鼠标输入转发 ==========
-void GameScene::handleKeyPress(int key)
-{
-    switch (key) {
-    case Qt::Key_W:     m_keyUp = true; break;
-    case Qt::Key_S:     m_keyDown = true; break;
-    case Qt::Key_A:     m_keyLeft = true; break;
-    case Qt::Key_D:     m_keyRight = true; break;
-    case Qt::Key_Space: m_keySpace = true; break;
-    case Qt::Key_F:     m_keyF = true; break;
-    default: break;
-    }
-}
-
-void GameScene::handleKeyRelease(int key)
-{
-    switch (key) {
-    case Qt::Key_W:     m_keyUp = false; break;
-    case Qt::Key_S:     m_keyDown = false; break;
-    case Qt::Key_A:     m_keyLeft = false; break;
-    case Qt::Key_D:     m_keyRight = false; break;
-    case Qt::Key_Space: m_keySpace = false; break;
-    case Qt::Key_F:     m_keyF = false; break;
-    default: break;
-    }
-}
-
-void GameScene::handleMousePress(Qt::MouseButton button, const QPointF &pos)
-{
-    // 后续步骤实现监管者攻击/破坏障碍物
-    Q_UNUSED(button);
-    Q_UNUSED(pos);
-}
-
-// ========== 主更新循环（每帧） ==========
-void GameScene::updateGame()
-{
-    // 1. 玩家移动输入（WASD）
-    if (m_player && !m_player->isDead() && !m_player->isInteracting()) {
-        qreal dx = 0, dy = 0;
-        if (m_keyUp)    dy -= 1.0;
-        if (m_keyDown)  dy += 1.0;
-        if (m_keyLeft)  dx -= 1.0;
-        if (m_keyRight) dx += 1.0;
-
-        m_player->setMoveDirection(dx, dy);
-    } else if (m_player) {
-        m_player->stopMoving();
-    }
-
-    // 2. 更新所有角色位置（含 AI 暂时不会移动，后续实现）
-    for (RoleItem *role : m_allRoles) {
-        if (role) {
-            role->updatePosition(sceneBounds());
+    QLineF line(p1, p2);
+    for (QGraphicsItem *item : m_obstacles) {
+        QRectF rect = item->sceneBoundingRect();
+        QLineF top(rect.topLeft(), rect.topRight());
+        QLineF bottom(rect.bottomLeft(), rect.bottomRight());
+        QLineF left(rect.topLeft(), rect.bottomLeft());
+        QLineF right(rect.topRight(), rect.bottomRight());
+        QPointF intersection;
+        if (line.intersects(top, &intersection) == QLineF::BoundedIntersection ||
+            line.intersects(bottom, &intersection) == QLineF::BoundedIntersection ||
+            line.intersects(left, &intersection) == QLineF::BoundedIntersection ||
+            line.intersects(right, &intersection) == QLineF::BoundedIntersection) {
+            return true;
         }
     }
-
-    // 3. 第3步：处理玩家交互（空格键破译/开门）
-    handleInteraction();
-
-    // 后续步骤可在此添加攻击冷却更新、技能冷却等
+    return false;
 }
 
-// ========== AI 决策循环（每 200ms） ==========
-void GameScene::updateAI()
+Bush* GameScene::getBushAt(const QPointF &point, qreal maxDistance) const
 {
-    // 后续步骤实现监管者 AI 和 AI 求生者
+    for (Bush *bush : m_bushes) {
+        if (bush->contains(bush->mapFromScene(point)))
+            return bush;
+    }
+    Bush *closest = nullptr;
+    qreal minDist = maxDistance;
+    for (Bush *bush : m_bushes) {
+        QPointF center = bush->sceneBoundingRect().center();
+        qreal d = QLineF(point, center).length();
+        if (d < minDist) {
+            minDist = d;
+            closest = bush;
+        }
+    }
+    return closest;
 }
 
-// ========== 第3步：交互逻辑 ==========
-void GameScene::handleInteraction()
+QList<Bush*> GameScene::getBushesInRadius(const QPointF &center, qreal radius) const
 {
-    if (!m_player || m_player->isDead()) return;
-
-    // 如果正在交互中，持续更新进度
-    if (m_interactingSurvivor == m_player) {
-        updateInteractProgress();
-        return;
+    QList<Bush*> result;
+    QRectF searchRect(center.x() - radius, center.y() - radius, radius * 2, radius * 2);
+    for (Bush *bush : m_bushes) {
+        if (bush->sceneBoundingRect().intersects(searchRect))
+            result.append(bush);
     }
-
-    if (!m_keySpace) return;
-    if (m_player->isInteracting()) return;
-
-    QPointF playerPos = m_player->pos();
-
-    // 1. 优先检查大门（已解锁）
-    for (GateItem *gate : m_gates) {
-        if (gate->isUnlocked() && !gate->isOpened()) {
-            QPointF diff = gate->pos() - playerPos;
-            qreal distSq = diff.x() * diff.x() + diff.y() * diff.y();
-            if (distSq <= 50 * 50) {
-                startOpeningGate(gate);
-                return;
-            }
-        }
-    }
-
-    // 2. 检查密码机（未完成）
-    for (CipherMachineItem *cipher : m_cipherMachines) {
-        if (!cipher->isCompleted()) {
-            QPointF diff = cipher->pos() - playerPos;
-            qreal distSq = diff.x() * diff.x() + diff.y() * diff.y();
-            if (distSq <= 50 * 50) {
-                startDecoding(cipher);
-                return;
-            }
-        }
-    }
+    return result;
 }
 
-void GameScene::startDecoding(CipherMachineItem *cipher)
+QList<QGraphicsItem*> GameScene::getObstaclesInRadius(const QPointF &center, qreal radius) const
 {
-    if (!m_player) return;
-
-    m_player->setState(RoleState::Interacting);
-    m_interactingSurvivor = m_player;
-    m_currentCipher = cipher;
-    m_currentGate = nullptr;
-    m_interactProgress = cipher->progress();
-    m_interactSpeed = 0.2;   // 测试用较快速度
-
-    cipher->setBeingDecoded(true);
-
-    if (m_interactProgressBar) {
-        m_interactProgressBar->setVisible(true);
-        m_interactProgressBar->setValue(static_cast<int>(m_interactProgress));
+    QList<QGraphicsItem*> result;
+    QRectF searchRect(center.x() - radius, center.y() - radius, radius * 2, radius * 2);
+    for (QGraphicsItem *item : m_obstacles) {
+        if (item->sceneBoundingRect().intersects(searchRect))
+            result.append(item);
     }
+    return result;
 }
 
-void GameScene::startOpeningGate(GateItem *gate)
+void GameScene::setPlayerCharacter(Character *player)
 {
-    if (!m_player) return;
-
-    m_player->setState(RoleState::Interacting);
-    m_interactingSurvivor = m_player;
-    m_currentGate = gate;
-    m_currentCipher = nullptr;
-    m_interactProgress = gate->openProgress();
-    m_interactSpeed = 0.2;
-
-    gate->setBeingOpened(true);
-
-    if (m_interactProgressBar) {
-        m_interactProgressBar->setVisible(true);
-        m_interactProgressBar->setValue(static_cast<int>(m_interactProgress));
-    }
+    m_playerCharacter = player;
 }
 
-void GameScene::stopInteracting()
+void GameScene::keyPressEvent(QKeyEvent *event)
 {
-    if (m_interactingSurvivor) {
-        m_interactingSurvivor->setState(RoleState::Idle);
-        m_interactingSurvivor = nullptr;
-    }
-    if (m_currentCipher) {
-        m_currentCipher->setBeingDecoded(false);
-        m_currentCipher = nullptr;
-    }
-    if (m_currentGate) {
-        m_currentGate->setBeingOpened(false);
-        m_currentGate = nullptr;
-    }
-    if (m_interactProgressBar) {
-        m_interactProgressBar->setVisible(false);
-    }
+    if (m_playerCharacter)
+        m_playerCharacter->handleKeyPress(event);
+    QGraphicsScene::keyPressEvent(event);
 }
 
-void GameScene::updateInteractProgress()
+void GameScene::keyReleaseEvent(QKeyEvent *event)
 {
-    // 如果松开空格或交互者不存在，停止交互
-    if (!m_interactingSurvivor || !m_keySpace) {
-        stopInteracting();
-        return;
-    }
-
-    m_interactProgress += m_interactSpeed;
-    if (m_interactProgress > 100) m_interactProgress = 100;
-
-    if (m_currentCipher) {
-        m_currentCipher->setProgress(static_cast<int>(m_interactProgress));
-        if (m_interactProgressBar) {
-            m_interactProgressBar->setValue(static_cast<int>(m_interactProgress));
-        }
-        if (m_currentCipher->isCompleted()) {
-            stopInteracting();
-        }
-    }
-    else if (m_currentGate) {
-        m_currentGate->setOpenProgress(static_cast<int>(m_interactProgress));
-        if (m_interactProgressBar) {
-            m_interactProgressBar->setValue(static_cast<int>(m_interactProgress));
-        }
-        if (m_currentGate->isOpened()) {
-            stopInteracting();
-        }
-    }
-}
-
-// ========== 第3步：密码机完成槽 ==========
-void GameScene::onCipherCompleted()
-{
-    m_completedCiphers++;
-
-    if (m_cipherLabel) {
-        m_cipherLabel->setText(QString("密码机: %1/3").arg(m_completedCiphers));
-    }
-
-    // 完成三台密码机，解锁所有大门
-    if (m_completedCiphers >= 3) {
-        for (GateItem *gate : m_gates) {
-            gate->setUnlocked(true);
-        }
-        m_gamePhase = GamePhase::Escape;
-        if (m_phaseLabel) {
-            m_phaseLabel->setText("逃脱阶段！快开门！");
-        }
-    }
+    if (m_playerCharacter)
+        m_playerCharacter->handleKeyRelease(event);
+    QGraphicsScene::keyReleaseEvent(event);
 }
