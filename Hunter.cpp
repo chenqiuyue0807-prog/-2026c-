@@ -1,7 +1,7 @@
 #include "Hunter.h"
 #include "Survivor.h"
 #include "GameScene.h"
-#include "GameScene.h"
+#include "entities/MechanicalPuppet.h"
 #include <QPainter>
 #include <QLineF>
 #include <QtMath>
@@ -11,7 +11,7 @@ Hunter::Hunter(QGraphicsItem *parent)
     : Character(parent)
     , m_attacking(false)
     , m_attackCooldownTimer(0)
-    , m_attackStunTimer(0)
+    // 删除 m_attackStunTimer(0)
     , m_destroying(false)
     , m_currentObstacle(nullptr)
     , m_destroyTimer(0)
@@ -22,52 +22,124 @@ Hunter::Hunter(QGraphicsItem *parent)
     setSpeedMultiplier(1.0);
     setEnabled(true);
     m_canMove = true;
+
+    m_animator = new CharacterAnimator(this);
+    m_animator->setFrameInterval(80);
+
+    auto loadImg = [&](const QString &path, const QString &direction) {
+        QPixmap pm(path);
+        if (pm.isNull()) {
+            qDebug() << "❌ Hunter: " << direction << "图片加载失败:" << path;
+        }
+        return pm.scaled(DEFAULT_WIDTH, DEFAULT_HEIGHT, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    };
+    m_animator->setDownPixmap (loadImg(":/new/prefix2/images/hongz.png",   "下"));
+    m_animator->setUpPixmap   (loadImg(":/new/prefix2/images/hongh.png", "上"));
+    m_animator->setLeftPixmap (loadImg(":/new/prefix2/images/hongzc.png",  "左"));
+    m_animator->setRightPixmap(loadImg(":/new/prefix2/images/hongyc.png",  "右"));
+
+    // 攻击特效图片
+    m_attackEffectPixmap.load(":/new/prefix1/images/gj.png");
+    if (!m_attackEffectPixmap.isNull()) {
+        m_attackEffectPixmap = m_attackEffectPixmap.scaled(GameConfig::ATTACK_RANGE * 2,
+                                                           GameConfig::ATTACK_RANGE * 2,
+                                                           Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+}
+
+void Hunter::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *)
+{
+    // 绘制角色本体
+    if (m_animator) {
+        QPixmap current = m_animator->currentPixmap();
+        if (!current.isNull()) {
+            painter->drawPixmap(boundingRect().toRect(), current);
+        }
+    }
+
+    // 攻击特效
+    if (m_attackEffectTimer > 0 && !m_attackEffectPixmap.isNull()) {
+        qreal alpha = m_attackEffectTimer / 15.0;
+        painter->setOpacity(alpha * 0.6);
+        QPointF localCenter = m_attackEffectPos - pos();
+        QSizeF half = m_attackEffectPixmap.size() / 2;
+        QPointF topLeft = localCenter - QPointF(half.width(), half.height());
+        painter->drawPixmap(topLeft, m_attackEffectPixmap);
+        painter->setOpacity(1.0);
+    }
+
+    // 状态文字（破坏或眩晕）—— 加大眩晕显示
+    if (m_destroying) {
+        painter->setPen(Qt::white);
+        painter->setFont(QFont("Arial", 12, QFont::Bold));
+        painter->drawText(boundingRect(), Qt::AlignCenter, "破坏");
+    } else if (m_stunned) {
+        // 眩晕：加大字号，半透明背景
+        QRectF rect = boundingRect();
+        painter->setBrush(QColor(0, 0, 0, 160));
+        painter->setPen(Qt::NoPen);
+        painter->drawRect(rect);
+        painter->setPen(Qt::yellow);
+        QFont font("Arial", 16, QFont::Bold);
+        painter->setFont(font);
+        painter->drawText(rect, Qt::AlignCenter, "眩晕");
+    }
 }
 
 void Hunter::updateCharacter()
 {
-    // 眩晕处理
+    if (m_attackEffectTimer > 0) { m_attackEffectTimer--; update(); }
+
     if (m_stunned) {
         if (m_stunTimer > 0) m_stunTimer--;
-        if (m_stunTimer <= 0) {
-            m_stunned = false;
-            m_canMove = true;
-        } else {
-            return; // 眩晕中不能做任何动作
-        }
+        if (m_stunTimer <= 0) { m_stunned = false; m_canMove = true; }
+        else return;
     }
 
-    // 攻击冷却
     if (m_attackCooldownTimer > 0) m_attackCooldownTimer--;
 
-    // 攻击后停顿
-    if (m_attackStunTimer > 0) {
-        m_attackStunTimer--;
-        return; // 停顿期间不能移动和做其他动作
-    }
+    if (m_destroying) { updateDestroyProgress(); return; }
 
-    // 破坏状态
-    if (m_destroying) {
-        updateDestroyProgress();
-        return; // 破坏中不能移动和攻击
-    }
-
-    // 移动（由 AI 或玩家设置的目标位置）
     if (m_hasTarget && m_canMove && m_enabled) {
-        moveTowardsTarget();
-    } else {
+        QPointF dir = m_targetPos - pos();
+        qreal len = QLineF(pos(), m_targetPos).length();
+        if (len < 5.0) {
+            clearTarget();
+        } else {
+            QPointF step = dir / len * currentSpeed();
+            QPointF newPos = pos() + step;
+            int halfW = DEFAULT_WIDTH / 2;
+            int halfH = DEFAULT_HEIGHT / 2;
+            if (newPos.x() < halfW) newPos.setX(halfW);
+            if (newPos.x() > GameConfig::MAP_WIDTH - halfW) newPos.setX(GameConfig::MAP_WIDTH - halfW);
+            if (newPos.y() < halfH) newPos.setY(halfH);
+            if (newPos.y() > GameConfig::MAP_HEIGHT - halfH) newPos.setY(GameConfig::MAP_HEIGHT - halfH);
+            setPos(newPos);
+
+            if (qAbs(dir.x()) > qAbs(dir.y()))
+                setFacingDirection(dir.x() > 0 ? Direction::Right : Direction::Left);
+            else
+                setFacingDirection(dir.y() > 0 ? Direction::Down : Direction::Up);
+        }
         setMoveDirection(Direction::None);
     }
 
-    // 基类移动（根据方向移动）
     Character::updateCharacter();
+
+    if (m_animator) {
+        if (m_hasTarget && m_canMove) {
+            m_animator->setDirection(m_facing);
+            m_animator->startAnimation();
+        } else {
+            m_animator->stopAnimation();
+        }
+    }
 }
 
 void Hunter::attack()
 {
     if (!m_enabled || m_stunned || m_destroying || m_attacking) return;
     if (!isAttackReady()) return;
-    if (m_attackStunTimer > 0) return;
 
     m_attacking = true;
     m_attackCooldownTimer = GameConfig::FRAMES_ATTACK_COOLDOWN;
@@ -81,37 +153,45 @@ void Hunter::performAttack()
 {
     QPointF hunterPos = pos();
     qreal attackRadius = GameConfig::ATTACK_RANGE;
-    qreal halfAngle = GameConfig::ATTACK_ANGLE / 2.0;
 
-    // 获取场景中所有求生者
     if (!m_scene) return;
+
+    m_attackEffectTimer = 15;
+    m_attackEffectPos = hunterPos;
+
     QList<QGraphicsItem*> items = m_scene->items();
     for (QGraphicsItem *item : items) {
         Survivor *survivor = dynamic_cast<Survivor*>(item);
-        if (!survivor || survivor->isEliminated()) continue;
+        if (survivor && !survivor->isEliminated()) {
+            QLineF line(hunterPos, survivor->pos());
+            if (line.length() <= attackRadius) {
+                qreal angleDiff = 0;
+                if (isSurvivorInAttackRange(survivor, angleDiff) &&
+                    !m_scene->lineIntersectsObstacle(hunterPos, survivor->pos())) {
+                    survivor->takeDamage();
+                    // 攻击命中后监管者硬直
+                    stun(GameConfig::HUNTER_STUN_AFTER_ATTACK);   // 使用新增常量
 
-        QLineF line(hunterPos, survivor->pos());
-        if (line.length() > attackRadius) continue;
-
-        qreal angleDiff = 0;
-        if (!isSurvivorInAttackRange(survivor, angleDiff)) continue;
-
-        // 射线检测障碍物遮挡
-        if (m_scene->lineIntersectsObstacle(hunterPos, survivor->pos())) continue;
-
-        // 命中
-        survivor->takeDamage();
-        m_attackStunTimer = GameConfig::HUNTER_ATTACK_STUN_FRAMES; // 自身停顿1秒
-
-        // 扫草逻辑：暴露草丛内求生者
-        QList<Bush*> bushes = m_scene->getBushesInRadius(hunterPos, attackRadius);
-        for (Bush *bush : bushes) {
-            if (bush->contains(bush->mapFromScene(survivor->pos()))) {
-                survivor->revealPosition(GameConfig::FRAMES_BUSH_REVEAL);
+                    QList<Bush*> bushes = m_scene->getBushesInRadius(hunterPos, attackRadius);
+                    for (Bush *bush : bushes) {
+                        if (bush->contains(bush->mapFromScene(survivor->pos()))) {
+                            survivor->revealPosition(GameConfig::FRAMES_BUSH_REVEAL);
+                        }
+                    }
+                    return;
+                }
             }
         }
 
-        break; // 单次攻击只命中一个目标
+        MechanicalPuppet *puppet = dynamic_cast<MechanicalPuppet*>(item);
+        if (puppet && !puppet->m_destroyed) {
+            QLineF line(hunterPos, puppet->pos());
+            if (line.length() <= attackRadius &&
+                !m_scene->lineIntersectsObstacle(hunterPos, puppet->pos())) {
+                puppet->destroy();
+                return;
+            }
+        }
     }
 }
 
@@ -132,28 +212,13 @@ bool Hunter::isSurvivorInAttackRange(Survivor *survivor, qreal &angleDiff) const
 
     angleDiff = fabs(angleToSurvivor - facingAngle);
     if (angleDiff > 180.0) angleDiff = 360.0 - angleDiff;
-
     return angleDiff <= GameConfig::ATTACK_HIT_ANGLE_TOLERANCE;
 }
 
 void Hunter::startDestroying(Obstacle *obstacle)
 {
-    if (!obstacle || m_destroying || m_stunned || !m_enabled) return;
-    if (m_attackStunTimer > 0) return;
-
-    qreal dist = QLineF(pos(), obstacle->sceneBoundingRect().center()).length();
-    if (dist > GameConfig::INTERACT_DESTROY_DIST) return;
-
-    m_destroying = true;
-    m_canMove = false;
-    m_currentObstacle = obstacle;
-
-    switch (obstacle->obstacleType()) {
-    case Obstacle::Wall:  m_destroyTimer = GameConfig::FRAMES_DESTROY_WALL; break;
-    case Obstacle::Box:   m_destroyTimer = GameConfig::FRAMES_DESTROY_BOX; break;
-    case Obstacle::Board: m_destroyTimer = GameConfig::FRAMES_DESTROY_BOARD; break;
-    default: m_destroyTimer = 60; break;
-    }
+    Q_UNUSED(obstacle);
+    return;
 }
 
 void Hunter::stopDestroying()
@@ -170,7 +235,6 @@ void Hunter::updateDestroyProgress()
         stopDestroying();
         return;
     }
-    // 距离过远则中断
     qreal dist = QLineF(pos(), m_currentObstacle->sceneBoundingRect().center()).length();
     if (dist > GameConfig::INTERACT_DESTROY_DIST * 1.5) {
         stopDestroying();
@@ -179,10 +243,9 @@ void Hunter::updateDestroyProgress()
 
     if (m_destroyTimer > 0) m_destroyTimer--;
     if (m_destroyTimer <= 0) {
-        // 破坏完成，移除障碍物
         if (m_scene) {
             m_scene->removeItem(m_currentObstacle);
-            delete m_currentObstacle; // 从场景移除并删除
+            delete m_currentObstacle;
         }
         emit obstacleDestroyed();
         stopDestroying();
@@ -209,42 +272,4 @@ void Hunter::clearTarget()
 {
     m_hasTarget = false;
     setMoveDirection(Direction::None);
-}
-
-void Hunter::moveTowardsTarget()
-{
-    QPointF dir = m_targetPos - pos();
-    qreal length = QLineF(pos(), m_targetPos).length();
-    if (length < 5.0) {
-        clearTarget();
-        return;
-    }
-    if (qAbs(dir.x()) > qAbs(dir.y())) {
-        setMoveDirection(dir.x() > 0 ? Direction::Right : Direction::Left);
-    } else {
-        setMoveDirection(dir.y() > 0 ? Direction::Down : Direction::Up);
-    }
-}
-
-void Hunter::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *)
-{
-    QColor color = QColor(180, 60, 60); // 暗红色
-    if (m_stunned) {
-        color = QColor(100, 100, 100);
-    } else if (m_destroying) {
-        color = QColor(200, 120, 60);   // 破坏中橙色
-    }
-
-    painter->setBrush(color);
-    painter->setPen(QPen(Qt::black, 2));
-    painter->drawRect(boundingRect());
-
-    // 状态文字
-    if (m_destroying) {
-        painter->setPen(Qt::white);
-        painter->drawText(boundingRect(), Qt::AlignCenter, "破坏");
-    } else if (m_stunned) {
-        painter->setPen(Qt::white);
-        painter->drawText(boundingRect(), Qt::AlignCenter, "眩晕");
-    }
 }

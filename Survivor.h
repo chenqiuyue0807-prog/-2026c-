@@ -4,82 +4,61 @@
 #include "Character.h"
 #include "GameConfig.h"
 
+class CharacterAnimator; // 前向声明
 class CipherMachine;
 class Gate;
-class TimerCounter;
 
 class Survivor : public Character
 {
     Q_OBJECT
-
 public:
     explicit Survivor(SurvivorType type, QGraphicsItem *parent = nullptr);
 
     SurvivorType survivortype() const { return m_type; }
-
-    // 生命值
     int health() const { return m_health; }
     bool isHurt() const { return m_health == 1; }
     bool isBurning() const { return m_burning; }
     bool isEliminated() const { return m_eliminated; }
 
-    // 救助标记
     bool hasBeenRescued() const { return m_hasBeenRescued; }
     void setRescued(bool rescued) { m_hasBeenRescued = rescued; }
 
-    // 状态查询
     bool isDecoding() const { return m_decoding; }
     bool isOpeningGate() const { return m_openingGate; }
     bool isRescuing() const { return m_rescuing; }
+    bool isHealing() const { return m_healing; }          // 是否正在治疗队友
 
-    // 交互对象
     CipherMachine* currentCipher() const { return m_currentCipher; }
     Gate* currentGate() const { return m_currentGate; }
     Survivor* rescueTarget() const { return m_rescueTarget; }
+    Survivor* healTarget() const { return m_healTarget; } // 治疗目标
 
-    // 破译速度倍率（正常 1.0，受伤 0.85）
     qreal decodeSpeedMultiplier() const;
 
-    // 受到攻击
     virtual void takeDamage();
-
-    // 治疗（医生技能或救助完成）
     virtual void heal();
-
-    // 燃烧
     virtual void startBurning();
-
-    // 救助
     virtual void startRescuing(Survivor *target);
     virtual void stopRescuing();
     virtual void completeRescue();
     virtual void beingRescued();
-
-    // 破译
     virtual void startDecoding(CipherMachine *cipher);
     virtual void stopDecoding();
-
-    // 大门
     virtual void startOpeningGate(Gate *gate);
     virtual void stopOpeningGate();
-
-    // 逃脱
     virtual void escape();
 
-    // 草丛状态
+    // 治疗交互（求生者之间治疗）
+    virtual void startHealing(Survivor *target);
+    virtual void stopHealing();
+    virtual void completeHeal();
+
     void setInBush(bool inBush);
     bool isInBush() const { return m_inBush; }
-
-    // 暴露位置（破译失误等）
     void revealPosition(int durationFrames);
 
-    // 每帧更新
     void updateCharacter() override;
-
-    // 绘制
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
-
-    // 基类速度
     qreal baseSpeed() const override;
 
 signals:
@@ -88,8 +67,13 @@ signals:
     void escaped();
 
 protected:
+    bool m_escaped = false;
+    int m_showEscapedText = 0;
+    int m_showEliminatedText = 0;
+
+    CharacterAnimator* m_animator = nullptr;
     SurvivorType m_type;
-    int m_health;               // 2=满血,1=受伤,0=倒地
+    int m_health;
     bool m_eliminated;
     bool m_burning;
     bool m_decoding;
@@ -97,19 +81,25 @@ protected:
     bool m_rescuing;
     bool m_hasBeenRescued;
     bool m_inBush;
+    bool m_healing = false;                // 正在治疗队友
 
-    CipherMachine *m_currentCipher;
-    Gate *m_currentGate;
-    Survivor *m_rescueTarget;
+    CipherMachine *m_currentCipher = nullptr;
+    Gate *m_currentGate = nullptr;
+    Survivor *m_rescueTarget = nullptr;
+    Survivor *m_healTarget = nullptr;       // 治疗的目标
 
-    // 计时器（帧计数）
-   // TimerCounter *timer() const { return m_timerCounter; }
-    int m_burnTimer;            // 燃烧剩余帧数
-    int m_rescueTimer;          // 救助进度帧数
-    int m_revealTimer;          // 暴露位置剩余帧数
+    int m_burnTimer;
+    int m_rescueTimer;
+    int m_revealTimer;
+    int m_healTimer = 0;                   // 治疗进度计时器（帧）
+    int m_downCount = 0;
+    int m_selfReviveTimer = 0;
+    bool m_canSelfRevive = true;
 
     void checkBurnTimeout();
     void updateRescueProgress();
+    void updateHealProgress();             // 更新治疗进度
+    void selfRevive();
 };
 
 #endif // SURVIVOR_H

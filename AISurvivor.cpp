@@ -3,15 +3,11 @@
 #include "CipherMachine.h"
 #include "Gate.h"
 #include "Hunter.h"
-//#include "MechanicalPuppet.h"   // 如果没有可注释掉相关部分
 #include "GameScene.h"
 #include "GameConfig.h"
 #include <QLineF>
 #include <QRandomGenerator>
-#include <QDebug>
 #include <QtMath>
-#include <QTimer>
-// 在顶端添加
 #include "MechanicalPuppet.h"
 
 AISurvivor::AISurvivor(SurvivorType type, QGraphicsItem *parent)
@@ -23,49 +19,57 @@ AISurvivor::AISurvivor(SurvivorType type, QGraphicsItem *parent)
     , m_forcedGate(nullptr)
     , m_beingChased(false)
     , m_skillCooldownTimer(0)
+    , m_chaseTimer(0)
 {
     setEnabled(true);
 }
 
 void AISurvivor::updateCharacter()
 {
-    // 先处理基类：燃烧、救助进度等
+    constexpr int halfW = 12;
+    constexpr int halfH = 12;
+
     Survivor::updateCharacter();
 
-    if (!m_enabled || m_eliminated || m_burning) {
-        return;
-    }
+    if (!m_enabled || m_eliminated || m_burning) return;
+    if (m_skillCooldownTimer > 0) m_skillCooldownTimer--;
 
-    // 更新技能冷却
-    if (m_skillCooldownTimer > 0) {
-        m_skillCooldownTimer--;
-    }
-
-    // 如果正在交互（破译、开门、救助），维持状态，并检查距离/有效性
-    if (m_decoding || m_openingGate || m_rescuing) {
-        // 交互有效性检查
-        if (m_decoding && m_currentCipher) {
-            qreal dist = QLineF(pos(), m_currentCipher->pos()).length();
-            if (dist > GameConfig::INTERACT_CIPHER_DIST || m_currentCipher->isCompleted()) {
-                stopDecoding();
+    // 被追击计时器递减
+    if (m_chaseTimer > 0) {
+        m_chaseTimer--;
+        if (m_chaseTimer == 0)
+            setBeingChased(false);
+        if (m_hunter) {
+            qreal d = QLineF(pos(), m_hunter->pos()).length();
+            if (d > 200.0) {
+                m_chaseTimer = 0;
+                setBeingChased(false);
             }
         }
-        if (m_openingGate && m_currentGate) {
-            qreal dist = QLineF(pos(), m_currentGate->pos()).length();
-            if (dist > GameConfig::INTERACT_GATE_DIST || !m_currentGate->isUnlocked()) {
-                stopOpeningGate();
+    }
+    // 若正在交互（包括治疗），但监管者靠近则中断并逃跑
+    if (m_hunter && (m_decoding || m_openingGate || m_rescuing || m_healing)) {
+        qreal distToHunter = QLineF(pos(), m_hunter->pos()).length();
+        if (distToHunter < 180.0) {
+            if (m_decoding) stopDecoding();
+            if (m_openingGate) stopOpeningGate();
+            if (m_rescuing) stopRescuing();
+            if (m_healing) stopHealing();        // 新增：中断治疗
+            QPointF away = pos() - m_hunter->pos();
+            qreal len = QLineF(pos(), m_hunter->pos()).length();
+            if (len > 0) {
+                qreal angle = atan2(away.y(), away.x());
+                qreal randAngle = (QRandomGenerator::global()->bounded(60) - 30) * M_PI / 180.0;
+                QPointF dir(cos(angle + randAngle), sin(angle + randAngle));
+                setTargetPosition(pos() + dir * 120.0);
             }
+            setBeingChased(true);
+            m_chaseTimer = 120;
+            return;
         }
-        if (m_rescuing && m_rescueTarget) {
-            qreal dist = QLineF(pos(), m_rescueTarget->pos()).length();
-            if (dist > GameConfig::INTERACT_RESCUE_DIST || !m_rescueTarget->isBurning()) {
-                stopRescuing();
-            }
-        }
-        return; // 交互中不移动
     }
 
-    // 优先处理强制指令
+    // 强制指令处理 (略，与之前相同)
     if (m_forcedCipher) {
         qreal dist = QLineF(pos(), m_forcedCipher->pos()).length();
         if (dist <= GameConfig::INTERACT_CIPHER_DIST && !m_forcedCipher->isCompleted() &&
@@ -88,98 +92,56 @@ void AISurvivor::updateCharacter()
     } else if (m_forcedGate) {
         qreal dist = QLineF(pos(), m_forcedGate->pos()).length();
         if (dist <= GameConfig::INTERACT_GATE_DIST && m_forcedGate->isUnlocked()) {
-            if (m_forcedGate->isFullyOpen()) {
-                escape();
-            } else {
-                startOpeningGate(m_forcedGate);
-            }
+            if (m_forcedGate->isFullyOpen()) escape();
+            else startOpeningGate(m_forcedGate);
             m_forcedGate = nullptr;
             clearTarget();
         } else {
             setTargetPosition(m_forcedGate->pos());
         }
     }
-
-    // 执行移动（向目标点）
+    // 移动
     if (m_hasTarget && m_canMove) {
-        moveTowardsTarget();
-    } else {
-        setMoveDirection(Direction::None);
-    }
-}
+        QPointF dir = m_targetPos - pos();
+        qreal len = QLineF(pos(), m_targetPos).length();
+        if (len < 5.0) {
+            clearTarget();
+        } else {
+            QPointF step = dir / len * currentSpeed();
+            QPointF newPos = pos() + step;
 
-void AISurvivor::setTargetPosition(const QPointF &pos)
-{
-    m_targetPos = pos;
-    m_hasTarget = true;
-}
+            if (newPos.x() < halfW) newPos.setX(halfW);
+            if (newPos.x() > GameConfig::MAP_WIDTH - halfW) newPos.setX(GameConfig::MAP_WIDTH - halfW);
+            if (newPos.y() < halfH) newPos.setY(halfH);
+            if (newPos.y() > GameConfig::MAP_HEIGHT - halfH) newPos.setY(GameConfig::MAP_HEIGHT - halfH);
+            setPos(newPos);
 
-void AISurvivor::clearTarget()
-{
-    m_hasTarget = false;
-    setMoveDirection(Direction::None);
-}
-
-void AISurvivor::forceDecode(CipherMachine *cipher)
-{
-    m_forcedCipher = cipher;
-    m_forcedRescueTarget = nullptr;
-    m_forcedGate = nullptr;
-}
-
-void AISurvivor::forceRescue(Survivor *target)
-{
-    m_forcedRescueTarget = target;
-    m_forcedCipher = nullptr;
-    m_forcedGate = nullptr;
-}
-
-void AISurvivor::forceEscape(Gate *gate)
-{
-    m_forcedGate = gate;
-    m_forcedCipher = nullptr;
-    m_forcedRescueTarget = nullptr;
-}
-
-void AISurvivor::forceHide()
-{
-    // 寻找最近的草丛
-    if (!m_scene) return;
-    QList<Bush*> bushes = m_scene->getBushes();
-    if (!bushes.isEmpty()) {
-        Bush *nearest = nullptr;
-        qreal minDist = 1e9;
-        for (Bush *b : bushes) {
-            qreal d = QLineF(pos(), b->sceneBoundingRect().center()).length();
-            if (d < minDist) {
-                minDist = d;
-                nearest = b;
+            if (qAbs(dir.x()) > qAbs(dir.y())) {
+                setFacingDirection(dir.x() > 0 ? Direction::Right : Direction::Left);
+            } else {
+                setFacingDirection(dir.y() > 0 ? Direction::Down : Direction::Up);
             }
         }
-        if (nearest) {
-            setTargetPosition(nearest->sceneBoundingRect().center());
+    }
+    // 动画
+    if (m_animator) {
+        if (m_direction != Direction::None && m_canMove) {
+            m_animator->setDirection(m_direction);
+            m_animator->startAnimation();
+        } else {
+            m_animator->stopAnimation();
         }
     }
-    // 否则由 SurvivorBehavior 继续计算
 }
 
-void AISurvivor::moveTowardsTarget()
-{
-    QPointF dir = m_targetPos - pos();
-    qreal length = QLineF(pos(), m_targetPos).length();
-    if (length < 5.0) {
-        clearTarget();
-        return;
-    }
-    if (qAbs(dir.x()) > qAbs(dir.y())) {
-        setMoveDirection(dir.x() > 0 ? Direction::Right : Direction::Left);
-    } else {
-        setMoveDirection(dir.y() > 0 ? Direction::Down : Direction::Up);
-    }
-}
+void AISurvivor::setTargetPosition(const QPointF &pos) { m_targetPos = pos; m_hasTarget = true; }
+void AISurvivor::clearTarget() { m_hasTarget = false; setMoveDirection(Direction::None); }
+void AISurvivor::forceDecode(CipherMachine *cipher) { m_forcedCipher = cipher; m_forcedRescueTarget = nullptr; m_forcedGate = nullptr; }
+void AISurvivor::forceRescue(Survivor *target) { m_forcedRescueTarget = target; m_forcedCipher = nullptr; m_forcedGate = nullptr; }
+void AISurvivor::forceEscape(Gate *gate) { m_forcedGate = gate; m_forcedCipher = nullptr; m_forcedRescueTarget = nullptr; }
+void AISurvivor::forceHide() { }
 
-void AISurvivor::setSkillCooldown()
-{
+void AISurvivor::setSkillCooldown() {
     switch (m_type) {
     case SurvivorType::Doctor:   m_skillCooldownTimer = GameConfig::FRAMES_DOCTOR_COOLDOWN; break;
     case SurvivorType::Mechanic: m_skillCooldownTimer = GameConfig::FRAMES_MECHANIC_COOLDOWN; break;
@@ -188,26 +150,19 @@ void AISurvivor::setSkillCooldown()
     }
 }
 
-void AISurvivor::useSkill()
-{
+void AISurvivor::useSkill() {
     if (!isSkillReady()) return;
-
     if (m_type == SurvivorType::Doctor) {
-        // 治疗自身或周围受伤队友
         Survivor *target = nullptr;
         qreal minDist = 30.0;
-        if (isHurt()) {
-            target = this;
-        } else {
+        if (isHurt()) target = this;
+        else {
             QList<QGraphicsItem*> items = m_scene->items();
             for (QGraphicsItem *item : items) {
                 Survivor *s = dynamic_cast<Survivor*>(item);
                 if (s && s != this && s->isHurt() && !s->isEliminated()) {
                     qreal d = QLineF(pos(), s->pos()).length();
-                    if (d < minDist) {
-                        minDist = d;
-                        target = s;
-                    }
+                    if (d < minDist) { minDist = d; target = s; }
                 }
             }
         }
@@ -216,42 +171,25 @@ void AISurvivor::useSkill()
             revealPosition(GameConfig::FRAMES_DOCTOR_HEAL);
         }
     }
-    // 在 useSkill() 的 Mechanic 分支中
     else if (m_type == SurvivorType::Mechanic) {
         if (m_scene) {
             MechanicalPuppet *puppet = new MechanicalPuppet(pos(), m_scene);
-            // 寻找最近未完成的密码机
             CipherMachine *target = nullptr;
             qreal minDist = 1e9;
-            QList<QGraphicsItem*> items = m_scene->items();
-            for (QGraphicsItem *item : items) {
-                CipherMachine *cipher = dynamic_cast<CipherMachine*>(item);
-                if (cipher && !cipher->isCompleted()) {
+            for (CipherMachine *cipher : m_ciphers) {
+                if (!cipher->isCompleted()) {
                     qreal d = QLineF(pos(), cipher->pos()).length();
-                    if (d < minDist) {
-                        minDist = d;
-                        target = cipher;
-                    }
+                    if (d < minDist) { minDist = d; target = cipher; }
                 }
             }
-            if (target) {
-                puppet->moveToTarget(target->pos());
-            }
+            if (target) puppet->moveToTarget(target->pos());
         }
     }
     else if (m_type == SurvivorType::AirForce) {
-        if (!m_scene) return;
-        Hunter *hunter = nullptr;
-        QList<QGraphicsItem*> items = m_scene->items();
-        for (auto *item : items) {
-            Hunter *h = dynamic_cast<Hunter*>(item);
-            if (h) { hunter = h; break; }
-        }
-        if (!hunter) return;
-        qreal dist = QLineF(pos(), hunter->pos()).length();
+        if (!m_hunter) return;
+        qreal dist = QLineF(pos(), m_hunter->pos()).length();
         if (dist > 120) return;
-
-        QPointF dir = hunter->pos() - pos();
+        QPointF dir = m_hunter->pos() - pos();
         qreal angleToHunter = atan2(dir.y(), dir.x()) * 180.0 / M_PI;
         if (angleToHunter < 0) angleToHunter += 360.0;
         qreal facingAngle = 0;
@@ -264,27 +202,34 @@ void AISurvivor::useSkill()
         }
         qreal diff = fabs(angleToHunter - facingAngle);
         if (diff > 180) diff = 360 - diff;
-        if (diff <= 30 && !m_scene->lineIntersectsObstacle(pos(), hunter->pos())) {
-            hunter->stun(GameConfig::FRAMES_AIRFORCE_STUN);
-            // 后撤：计算后退位置
-            qreal len = sqrt(dir.x() * dir.x() + dir.y() * dir.y());
+        if (diff <= 30 && !m_scene->lineIntersectsObstacle(pos(), m_hunter->pos())) {
+            m_hunter->stun(GameConfig::FRAMES_AIRFORCE_STUN);
+            qreal len = sqrt(dir.x()*dir.x() + dir.y()*dir.y());
             if (len > 0.0001) {
                 QPointF unit = dir / len;
                 QPointF back = pos() - unit * 20;
-                setPos(back);
+                moveWithCollision(back);
             }
             revealPosition(GameConfig::FRAMES_AIRFORCE_STUN);
         }
     }
-
     setSkillCooldown();
 }
 
-void AISurvivor::takeDamage()
-{
+void AISurvivor::takeDamage() {
     Survivor::takeDamage();
-    // 通知行为模块（如果存在）
-    if (m_behavior) {
-        // m_behavior->onDamageReceived(this);  // 可选
+    if (!m_eliminated && m_hunter) {
+        m_forcedCipher = nullptr;
+        m_forcedRescueTarget = nullptr;
+        m_forcedGate = nullptr;
+        QPointF away = pos() - m_hunter->pos();
+        qreal len = QLineF(pos(), m_hunter->pos()).length();
+        if (len < 1.0) len = 1.0;
+        qreal angle = atan2(away.y(), away.x());
+        qreal randAngle = (QRandomGenerator::global()->bounded(40) - 20) * M_PI / 180.0;
+        QPointF dir(cos(angle + randAngle), sin(angle + randAngle));
+        setTargetPosition(pos() + dir * 130.0);
+        setBeingChased(true);
+        m_chaseTimer = 150;
     }
 }

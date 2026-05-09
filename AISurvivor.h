@@ -17,56 +17,47 @@ class AISurvivor : public Survivor
 public:
     explicit AISurvivor(SurvivorType type, QGraphicsItem *parent = nullptr);
 
-    // 每帧更新（移动、维持交互、冷却等）
     void updateCharacter() override;
 
-    // 移动目标设置（由 SurvivorBehavior 调用）
     void setTargetPosition(const QPointF &pos);
     void clearTarget();
     bool hasTarget() const { return m_hasTarget; }
     QPointF targetPosition() const { return m_targetPos; }
 
-    // 强制指令（优先级高于常规决策）
     void forceDecode(CipherMachine *cipher);
     void forceRescue(Survivor *target);
     void forceEscape(Gate *gate);
     void forceHide();
 
-    // 被追击状态
     void setBeingChased(bool chased) { m_beingChased = chased; }
     bool isBeingChased() const { return m_beingChased; }
 
-    // 技能相关
     bool isSkillReady() const { return m_skillCooldownTimer <= 0; }
-    void useSkill();                            // 释放技能（F键）
+    void useSkill();
 
-    // 重写受伤，通知行为模块（如有）
     void takeDamage() override;
 
-    // 设置行为模块（可选）
     void setBehavior(SurvivorBehavior *behavior) { m_behavior = behavior; }
 
+    void setHunter(Hunter *hunter) { m_hunter = hunter; }
+    void setCiphers(const QList<CipherMachine*> &ciphers) { m_ciphers = ciphers; }
+
 private:
-    // 移动辅助
-    void moveTowardsTarget();
-    void onInteractComplete();      // 交互完成清除强制目标
-
-    SurvivorBehavior *m_behavior;   // 行为决策模块（可空）
-
-    // 移动目标
+    SurvivorBehavior *m_behavior;
     bool m_hasTarget;
     QPointF m_targetPos;
-
-    // 强制交互目标
-    CipherMachine *m_forcedCipher;
-    Survivor *m_forcedRescueTarget;
-    Gate *m_forcedGate;
-
-    bool m_beingChased;             // 是否正被监管者追击
-
-    // 技能冷却（帧计数）
+    CipherMachine *m_forcedCipher = nullptr;
+    Survivor *m_forcedRescueTarget = nullptr;
+    Gate *m_forcedGate = nullptr;
+    bool m_beingChased;
     int m_skillCooldownTimer;
+    int m_chaseTimer = 0;               // 强制逃跑持续时间
+    Hunter *m_hunter = nullptr;
+    QList<CipherMachine*> m_ciphers;
+
     void setSkillCooldown();
+    void moveTowardsTarget();
+    void onInteractComplete();
 };
 
-#endif // AISURVIVOR_H
+#endif

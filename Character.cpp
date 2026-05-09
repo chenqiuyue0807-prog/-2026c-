@@ -1,10 +1,11 @@
+#include "GameConfig.h"
 #include "Character.h"
 #include "GameScene.h"
 #include <QPainter>
 #include <QtMath>
 
 Character::Character(QGraphicsItem *parent)
-    : QGraphicsObject(parent)   // 正确
+    : QGraphicsObject(parent)
     , m_direction(Direction::None)
     , m_facing(Direction::Down)
     , m_canMove(true)
@@ -17,14 +18,12 @@ Character::Character(QGraphicsItem *parent)
 
 void Character::updateCharacter()
 {
-    // 若全局禁用、禁止移动或无移动方向，则不移动
     if (!m_enabled || !m_canMove || m_direction == Direction::None)
         return;
 
     qreal speed = currentSpeed();
     QPointF delta;
 
-    // 根据移动方向计算位移，并更新面向方向
     switch (m_direction) {
     case Direction::Up:
         delta = QPointF(0, -speed);
@@ -46,7 +45,6 @@ void Character::updateCharacter()
         return;
     }
 
-    // 尝试移动（含碰撞回退）
     moveWithCollision(delta);
 }
 
@@ -60,62 +58,74 @@ void Character::setMoveDirection(Direction dir)
     m_direction = dir;
 }
 
+// 简单沿墙滑动，不强制推出
 void Character::moveWithCollision(const QPointF &delta)
 {
     if (delta.isNull()) return;
 
     QPointF newPos = pos() + delta;
-
-    // 完整位移未碰撞则直接移动
     if (!wouldCollideWithObstacle(newPos)) {
         setPos(newPos);
         return;
     }
 
-    // 尝试单独沿 X 轴或 Y 轴移动（分离轴处理）
+    // 尝试仅水平移动
     QPointF horizPos = pos() + QPointF(delta.x(), 0);
-    QPointF vertPos  = pos() + QPointF(0, delta.y());
-
-    bool horizOk = !wouldCollideWithObstacle(horizPos);
-    bool vertOk  = !wouldCollideWithObstacle(vertPos);
-
-    if (horizOk && vertOk) {
-        // 两个轴都可移动，选择位移较大的轴
-        if (qAbs(delta.x()) > qAbs(delta.y()))
-            setPos(horizPos);
-        else
-            setPos(vertPos);
-    } else if (horizOk) {
+    if (!wouldCollideWithObstacle(horizPos)) {
         setPos(horizPos);
-    } else if (vertOk) {
-        setPos(vertPos);
+        return;
     }
-    // 否则完全卡住，位置不变
+
+    // 尝试仅垂直移动
+    QPointF vertPos = pos() + QPointF(0, delta.y());
+    if (!wouldCollideWithObstacle(vertPos)) {
+        setPos(vertPos);
+        return;
+    }
+
+    // 如果都失败，就不移动（避免滑动和卡墙）
+}
+
+// 寻找最近的安全位置（简单环绕搜索）
+void Character::unstuck()
+{
+    const int searchRadius = 80;
+    QPointF cur = pos();
+    for (int r = 5; r < searchRadius; r += 5) {
+        for (int angle = 0; angle < 360; angle += 30) {
+            QPointF test = cur + QPointF(r * cos(angle * M_PI / 180.0), r * sin(angle * M_PI / 180.0));
+            if (!wouldCollideWithObstacle(test)) {
+                setPos(test);
+                return;
+            }
+        }
+    }
+    setPos(GameConfig::getSurvivorSpawnPoint(0));
 }
 
 bool Character::wouldCollideWithObstacle(const QPointF &newPos) const
 {
     if (!m_scene) return false;
 
-    // 构建角色在新位置的矩形
-    QRectF characterRect(newPos.x() - DEFAULT_WIDTH / 2,
-                         newPos.y() - DEFAULT_HEIGHT / 2,
-                         DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    // 使用稍小的矩形进行检测（内缩2像素），防止像素级嵌入
+    const qreal margin = 2.0;
+    QRectF characterRect(newPos.x() - DEFAULT_WIDTH / 2 + margin,
+                         newPos.y() - DEFAULT_HEIGHT / 2 + margin,
+                         DEFAULT_WIDTH - margin * 2,
+                         DEFAULT_HEIGHT - margin * 2);
 
-    // 检查与所有障碍物的矩形相交
     const QList<QGraphicsItem*>& obstacles = m_scene->getObstacles();
     for (QGraphicsItem *obs : obstacles) {
         if (obs->sceneBoundingRect().intersects(characterRect))
             return true;
     }
 
-    // 地图边界限制
-    if (newPos.x() < DEFAULT_WIDTH / 2 ||
-        newPos.x() > GameConfig::MAP_WIDTH - DEFAULT_WIDTH / 2 ||
-        newPos.y() < DEFAULT_HEIGHT / 2 ||
-        newPos.y() > GameConfig::MAP_HEIGHT - DEFAULT_HEIGHT / 2) {
+    // 地图边界（内缩角色半径）
+    qreal halfW = DEFAULT_WIDTH / 2.0;
+    qreal halfH = DEFAULT_HEIGHT / 2.0;
+    if (newPos.x() < halfW || newPos.x() > GameConfig::MAP_WIDTH - halfW ||
+        newPos.y() < halfH || newPos.y() > GameConfig::MAP_HEIGHT - halfH)
         return true;
-    }
 
     return false;
 }
@@ -128,20 +138,19 @@ QRectF Character::boundingRect() const
 
 void Character::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *)
 {
-    // 默认绘制灰色矩形，子类可重写以显示具体图标
     painter->setBrush(Qt::gray);
     painter->setPen(Qt::black);
     painter->drawRect(boundingRect());
 
-    // 绘制朝向指示（简单箭头）
     painter->setPen(Qt::red);
     QPointF center(0, 0);
     QPointF arrow;
     switch (m_facing) {
-    case Direction::Up:    arrow = QPointF(0, -15); break;
-    case Direction::Down:  arrow = QPointF(0, 15); break;
-    case Direction::Left:  arrow = QPointF(-15, 0); break;
-    case Direction::Right: arrow = QPointF(15, 0); break;
+    // 将箭头数值从15改为20左右
+    case Direction::Up:    arrow = QPointF(0, -20); break;
+    case Direction::Down:  arrow = QPointF(0, 20); break;
+    case Direction::Left:  arrow = QPointF(-20, 0); break;
+    case Direction::Right: arrow = QPointF(20, 0); break;
     default: return;
     }
     painter->drawLine(center, arrow);
