@@ -1,16 +1,14 @@
-QT += widgets multimedia
-INCLUDEPATH += $$PWD/entities
+QT += core gui widgets multimedia
 
 CONFIG += c++17
-
-# You can make your code fail to compile if it uses deprecated APIs.
-# In order to do so, uncomment the following line.
-#DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
+QT += core gui multimedia
+CONFIG(release, debug|release) {
+    DEFINES += QT_NO_DEBUG_OUTPUT
+}
 
 SOURCES += \
     GameEngine.cpp \
     GameScene.cpp \
-    Widget.cpp \
     ai/AIDecisionMaker.cpp \
     ai/HunterBehavior.cpp \
     ai/SurvivorBehavior.cpp \
@@ -33,6 +31,7 @@ SOURCES += \
     ui/PauseWidget.cpp \
     ui/ResultWidget.cpp \
     ui/SettingsWidget.cpp \
+    utils/AudioManager.cpp \
     utils/CameraFollow.cpp \
     utils/CharacterAnimator.cpp \
     utils/CollisionHelper.cpp \
@@ -45,7 +44,6 @@ HEADERS += \
     GameConfig.h \
     GameEngine.h \
     GameScene.h \
-    Widget.h \
     ai/AIDecisionMaker.h \
     ai/HunterBehavior.h \
     ai/SurvivorBehavior.h \
@@ -76,9 +74,7 @@ HEADERS += \
     utils/TimerCounter.h \
     utils/UIManager.h
 
-FORMS +=
+INCLUDEPATH += $$PWD
 
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target
+RESOURCES += \
+    resources.qrc

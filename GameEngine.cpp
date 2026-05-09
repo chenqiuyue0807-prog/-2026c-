@@ -1,55 +1,36 @@
 #include "GameEngine.h"
 #include "GameScene.h"
-#include "PlayerSurvivor.h"
-#include "AISurvivor.h"
-#include "Hunter.h"
-#include "GameConfig.h"
-#include <QGraphicsRectItem>
-#include <QDebug>
-#include "GameEngine.h"
+#include "entities/PlayerSurvivor.h"
+#include "entities/AISurvivor.h"
+#include "entities/Hunter.h"
 #include "entities/CipherMachine.h"
 #include "entities/Gate.h"
-#include "entities/PlayerSurvivor.h"
-#include "entities/Hunter.h"
-#include "entities/AISurvivor.h"
+#include "GameConfig.h"
+#include "ai/AIDecisionMaker.h"
+#include "ai/HunterBehavior.h"
+#include "ai/SurvivorBehavior.h"
+#include "utils/AudioManager.h"
+#include <QDebug>
+#include <QLineF>
 
 GameEngine::GameEngine(QObject *parent)
     : QObject(parent)
     , m_scene(nullptr)
     , m_player(nullptr)
     , m_hunter(nullptr)
+    , m_aiDecisionMaker(nullptr)
+    , m_hunterBehavior(nullptr)
+    , m_survivorBehavior(nullptr)
     , m_paused(false)
     , m_state(Preparation)
     , m_escapedCount(0)
     , m_rescueCount(0)
     , m_destroyCount(0)
+    , m_lastSurvivorType(0)
 {
     m_scene = new GameScene(this);
     m_scene->setSceneRect(0, 0, GameConfig::MAP_WIDTH, GameConfig::MAP_HEIGHT);
     connect(&m_frameTimer, &QTimer::timeout, this, &GameEngine::gameLoop);
-}
-QList<CipherMachine*> GameEngine::getCiphers() const
-{
-    QList<CipherMachine*> list;
-    // 如果你的 m_ciphers 中存储的是 CipherMachine*，直接转换返回
-    for (const auto& data : m_ciphers) {
-        if (auto* cm = dynamic_cast<CipherMachine*>(data.item)) {
-            list.append(cm);
-        }
-    }
-    // 如果密码机是直接使用 CipherMachine 对象存储，请相应调整
-    return list;
-}
-
-QList<Gate*> GameEngine::getGates() const
-{
-    QList<Gate*> list;
-    for (const auto& data : m_gates) {
-        if (auto* gate = dynamic_cast<Gate*>(data.item)) {
-            list.append(gate);
-        }
-    }
-    return list;
 }
 
 GameEngine::~GameEngine()
@@ -59,93 +40,101 @@ GameEngine::~GameEngine()
 
 void GameEngine::startGame(int survivorType)
 {
+    m_lastSurvivorType = survivorType;
     cleanupGameWorld();
     createGameWorld(survivorType);
 
-    // 进入准备阶段
-    setGameState(Preparation);
+    // ---- 创建行为模块并注入依赖 ----
+    m_hunterBehavior = new HunterBehavior(this);
+    m_hunterBehavior->setHunter(m_hunter);
+    m_hunterBehavior->setScene(m_scene);
+    m_hunterBehavior->setCiphers(m_cachedCiphers);
+    m_hunterBehavior->setGates(m_cachedGates);
+    m_hunterBehavior->setSurvivors(m_aiSurvivors, m_player);
+    m_hunterBehavior->setGamePhase(1);   // 破译阶段
 
-    // 启动主循环
+    m_survivorBehavior = new SurvivorBehavior(this);
+    m_survivorBehavior->setScene(m_scene);
+    m_survivorBehavior->setCiphers(m_cachedCiphers);
+    m_survivorBehavior->setGates(m_cachedGates);
+    m_survivorBehavior->setHunter(m_hunter);
+    m_survivorBehavior->setPlayerSurvivor(m_player);
+    m_survivorBehavior->setGamePhase(1);
+
+    m_aiDecisionMaker = new AIDecisionMaker(this);
+    m_aiDecisionMaker->setScene(m_scene);
+    m_aiDecisionMaker->setHunter(m_hunter);
+    m_aiDecisionMaker->setSurvivors(m_aiSurvivors);
+    m_aiDecisionMaker->setPlayer(m_player);
+    m_aiDecisionMaker->setBehaviors(m_hunterBehavior, m_survivorBehavior);
+    m_aiDecisionMaker->start();
+    // ----------------------------------
+
+    setGameState(Decoding);
     m_frameTimer.start(FRAME_INTERVAL);
     m_paused = false;
+
+    m_survivorBehavior->setSurvivors(m_aiSurvivors, m_player);
+    AudioManager::instance()->playMusic(AudioManager::GameBGM);   // 开始游戏背景
+}
+
+void GameEngine::restartGame()
+{
+    m_frameTimer.stop();
+    startGame(m_lastSurvivorType);
 }
 
 void GameEngine::gameLoop()
 {
+    static int frameCount = 0;
+    static QElapsedTimer fpsTimer;
+    if (!fpsTimer.isValid()) fpsTimer.start();
+    frameCount++;
+    if (fpsTimer.elapsed() >= 1000) {
+        qDebug() << "FPS:" << frameCount;
+        frameCount = 0;
+        fpsTimer.restart();
+    }
+
     if (m_paused) return;
 
-    // 更新倒计时
+    // ========== 每帧动态切换背景音乐 ==========
+    updateDynamicMusic();
+
     updateCountdown();
 
-    // 更新密码机进度（如果处于破译阶段）
-    if (m_state == Decoding) {
-        for (auto &cipher : m_ciphers) {
-            if (cipher.completed) continue;
-
-            // 检查是否有求生者在附近
-            for (auto *survivor : m_aiSurvivors) {
-                if (survivor->isEnabled() && !survivor->isEliminated()) {
-                    QLineF line(survivor->pos(), cipher.item->pos());
-                    if (line.length() <= GameConfig::INTERACT_CIPHER_DIST) {
-                        cipher.progress += 1; // 每帧增加 1% （约 45 秒达到 100%）
-                        if (cipher.progress >= 100) {
-                            cipher.progress = 100;
-                            cipher.completed = true;
-                            emit cipherProgressChanged(completedCipherCount(), GameConfig::CIPHER_COUNT);
-                        }
-                    }
-                }
+    static int cleanupCounter = 0;
+    if (++cleanupCounter >= 60) {
+        cleanupCounter = 0;
+        for (int i = m_aiSurvivors.size() - 1; i >= 0; --i) {
+            if (m_aiSurvivors[i]->isEliminated()) {
+                m_aiSurvivors.removeAt(i);
             }
-        }
-        // 检查是否所有密码机完成
-        if (completedCipherCount() >= GameConfig::CIPHER_COUNT) {
-            // 解锁大门
-            for (auto &gate : m_gates) {
-                gate.unlocked = true;
-            }
-            setGameState(Escape);
         }
     }
 
-    // 更新大门开启进度（逃脱阶段）
+    for (auto* cipher : m_cachedCiphers)
+        cipher->updateCipher();
+
+    if (completedCipherCount() >= GameConfig::CIPHER_COUNT && m_state == Decoding) {
+        for (auto* gate : m_cachedGates)
+            gate->setUnlocked(true);
+        setGameState(Escape);
+        if (m_hunterBehavior) m_hunterBehavior->setGamePhase(2);
+        if (m_survivorBehavior) m_survivorBehavior->setGamePhase(2);
+    }
+
     if (m_state == Escape) {
-        for (auto &gate : m_gates) {
-            if (!gate.unlocked || gate.progress >= 100) continue;
-
-            // 检查是否有求生者在附近
-            for (auto *survivor : m_aiSurvivors) {
-                if (survivor->isEnabled() && !survivor->isEliminated()) {
-                    QLineF line(survivor->pos(), gate.item->pos());
-                    if (line.length() <= GameConfig::INTERACT_GATE_DIST) {
-                        gate.progress += 1; // 每帧增加 1%，约 10 秒到 100%
-                        if (gate.progress >= 100) {
-                            gate.progress = 100;
-                            // 有求生者逃脱
-                            survivor->escape();
-                            m_escapedCount++;
-                            checkVictoryCondition();
-                        }
-                    }
-                }
-            }
-        }
+        for (auto* gate : m_cachedGates)
+            gate->updateGate();
     }
 
-    // 更新 AI
-    updateAI();
-
-    // 更新所有角色移动
     m_scene->advance();
-    if (m_player && m_player->isEnabled())
-        m_player->updateCharacter();
-    if (m_hunter && m_hunter->isEnabled())
-        m_hunter->updateCharacter();
-    for (auto *ai : m_aiSurvivors) {
-        if (ai->isEnabled())
-            ai->updateCharacter();
-    }
+    if (m_player && m_player->isEnabled()) m_player->updateCharacter();
+    if (m_hunter && m_hunter->isEnabled()) m_hunter->updateCharacter();
+    for (auto* ai : m_aiSurvivors) if (ai->isEnabled()) ai->updateCharacter();
 
-    // 发送时间信号
+    emit cipherProgressChanged(completedCipherCount(), GameConfig::CIPHER_COUNT);
     emit timeUpdated(remainingTime());
 }
 
@@ -156,27 +145,22 @@ void GameEngine::setGameState(GameState state)
     m_stageTimer.restart();
     emit gameStateChanged(state);
 
-    // 状态切换时的处理
     switch (state) {
     case Preparation:
-        // 禁用所有角色
         if (m_player) m_player->setEnabled(false);
         if (m_hunter) m_hunter->setEnabled(false);
         for (auto *ai : m_aiSurvivors) ai->setEnabled(false);
         break;
     case Decoding:
-        // 启用所有角色
         if (m_player) m_player->setEnabled(true);
         if (m_hunter) m_hunter->setEnabled(true);
         for (auto *ai : m_aiSurvivors) ai->setEnabled(true);
         break;
     case Escape:
-        // 大门已解锁，监管者加速
         if (m_hunter) m_hunter->setSpeedMultiplier(GameConfig::ESCAPE_HUNTER_SPEED_RATIO);
         break;
     case Result:
         m_frameTimer.stop();
-        // 判断胜负
         break;
     }
 }
@@ -185,49 +169,29 @@ void GameEngine::updateCountdown()
 {
     qint64 elapsed = m_stageTimer.elapsed();
     bool timeout = false;
-
     switch (m_state) {
-    case Preparation:
-        if (elapsed >= PREPARATION_DURATION) timeout = true;
-        break;
-    case Decoding:
-        if (elapsed >= DECODING_DURATION) timeout = true;
-        break;
-    case Escape:
-        if (elapsed >= ESCAPE_DURATION) timeout = true;
-        break;
-    default:
-        return;
+    case Preparation: if (elapsed >= PREPARATION_DURATION) timeout = true; break;
+    case Decoding:    if (elapsed >= DECODING_DURATION) timeout = true; break;
+    case Escape:      if (elapsed >= ESCAPE_DURATION) timeout = true; break;
+    default: return;
     }
-
     if (timeout) {
-        if (m_state == Preparation) {
-            setGameState(Decoding);
-        } else if (m_state == Decoding) {
-            hunterWin(); // 破译超时，监管者胜
-        } else if (m_state == Escape) {
-            hunterWin(); // 逃脱超时，监管者胜
-        }
+        if (m_state == Preparation) setGameState(Decoding);
+        else if (m_state == Decoding) hunterWin();
+        else if (m_state == Escape) hunterWin();
     }
 }
 
 void GameEngine::checkVictoryCondition()
 {
-    // 至少一人逃脱，求生者胜
-    if (m_escapedCount > 0) {
-        survivorWin();
-        return;
-    }
-    // 所有求生者被淘汰，监管者胜
-    if (aliveSurvivorCount() == 0) {
-        hunterWin();
-        return;
-    }
+    if (m_escapedCount > 1) { survivorWin(); return; }
+    if (aliveSurvivorCount() == 0) { hunterWin(); return; }
 }
 
 void GameEngine::survivorWin()
 {
     if (m_state != Result) {
+        AudioManager::instance()->playMusic(AudioManager::GameOver);
         setGameState(Result);
         emit gameEnded(true);
     }
@@ -236,6 +200,7 @@ void GameEngine::survivorWin()
 void GameEngine::hunterWin()
 {
     if (m_state != Result) {
+        AudioManager::instance()->playMusic(AudioManager::GameOver);
         setGameState(Result);
         emit gameEnded(false);
     }
@@ -248,16 +213,14 @@ int GameEngine::remainingTime() const
     case Preparation: return qMax(0, (int)((PREPARATION_DURATION - elapsed) / 1000));
     case Decoding:    return qMax(0, (int)((DECODING_DURATION - elapsed) / 1000));
     case Escape:      return qMax(0, (int)((ESCAPE_DURATION - elapsed) / 1000));
-    default:          return 0;
+    default: return 0;
     }
 }
 
 int GameEngine::completedCipherCount() const
 {
     int count = 0;
-    for (const auto &c : m_ciphers) {
-        if (c.completed) count++;
-    }
+    for (auto* c : m_cachedCiphers) if (c->isCompleted()) count++;
     return count;
 }
 
@@ -265,9 +228,7 @@ int GameEngine::aliveSurvivorCount() const
 {
     int count = 0;
     if (m_player && !m_player->isEliminated()) count++;
-    for (auto *ai : m_aiSurvivors) {
-        if (!ai->isEliminated()) count++;
-    }
+    for (auto* ai : m_aiSurvivors) if (!ai->isEliminated()) count++;
     return count;
 }
 
@@ -283,36 +244,28 @@ void GameEngine::resumeGame()
     m_frameTimer.start(FRAME_INTERVAL);
 }
 
-void GameEngine::restartGame()
-{
-    // 需要重新选择角色，这里简单重新开始同样的角色
-    // 实际使用时通过信号让外部重启
-    cleanupGameWorld();
-    // 此处需要外部传入角色类型，简化处理
-}
-
 void GameEngine::exitToMainMenu()
 {
     m_frameTimer.stop();
     cleanupGameWorld();
-    // 发出信号让外部切换界面
 }
 
-// ---------- 游戏世界创建 ----------
 void GameEngine::createGameWorld(int survivorType)
 {
-    // 创建玩家
+    m_scene->createObstaclesAndBushes();
+
     m_player = new PlayerSurvivor(static_cast<SurvivorType>(survivorType));
     m_player->setPos(GameConfig::getSurvivorSpawnPoint(0));
+    m_player->setGameScene(m_scene);
+    m_player->setGameEngine(this);
     m_scene->addItem(m_player);
     m_scene->setPlayerCharacter(m_player);
 
-    // 创建监管者
     m_hunter = new Hunter();
     m_hunter->setPos(GameConfig::getHunterSpawnPoint());
+    m_hunter->setGameScene(m_scene);
     m_scene->addItem(m_hunter);
 
-    // 创建 AI 求生者（剩下的两种类型）
     QList<SurvivorType> aiTypes;
     if (survivorType != 0) aiTypes.append(SurvivorType::Doctor);
     if (survivorType != 1) aiTypes.append(SurvivorType::Mechanic);
@@ -320,85 +273,100 @@ void GameEngine::createGameWorld(int survivorType)
     for (int i = 0; i < aiTypes.size(); ++i) {
         AISurvivor *ai = new AISurvivor(aiTypes[i]);
         ai->setPos(GameConfig::getSurvivorSpawnPoint(i + 1));
+        ai->setGameScene(m_scene);
         m_scene->addItem(ai);
         m_aiSurvivors.append(ai);
     }
 
-    // 创建密码机（3个）
     QList<QPointF> cipherPos = GameConfig::getCipherPositions();
     for (const QPointF &pos : cipherPos) {
-        auto *item = m_scene->addRect(QRectF(-15, -15, 30, 30), QPen(Qt::black), QBrush(Qt::gray));
-        item->setPos(pos);
-        CipherData cd;
-        cd.item = item;
-        cd.progress = 0;
-        cd.completed = false;
-        m_ciphers.append(cd);
+        CipherMachine *c = new CipherMachine();
+        c->setPos(pos);
+        m_scene->addItem(c);
+        m_cachedCiphers.append(c);
     }
 
-    // 创建大门（2个，初始锁定）
     QList<QPointF> gatePos = GameConfig::getGatePositions();
     for (const QPointF &pos : gatePos) {
-        auto *item = m_scene->addRect(QRectF(-20, -30, 40, 60), QPen(Qt::black), QBrush(Qt::darkRed));
-        item->setPos(pos);
-        GateData gd;
-        gd.item = item;
-        gd.progress = 0;
-        gd.unlocked = false;
-        m_gates.append(gd);
+        Gate *g = new Gate();
+        g->setPos(pos);
+        m_scene->addItem(g);
+        m_cachedGates.append(g);
     }
 
-    // 重置统计
     m_escapedCount = 0;
     m_rescueCount = 0;
     m_destroyCount = 0;
+
+    auto onEscape = [this]() {
+        m_escapedCount++;
+        checkVictoryCondition();
+    };
+    if (m_player) {
+        connect(m_player, &Survivor::escaped, this, onEscape);
+    }
+    for (auto *ai : m_aiSurvivors) {
+        connect(ai, &Survivor::escaped, this, onEscape);
+    }
 }
 
 void GameEngine::cleanupGameWorld()
 {
-    m_frameTimer.stop();
-    if (m_scene) {
-        m_scene->clear();
+    if (m_aiDecisionMaker) {
+        m_aiDecisionMaker->stop();
+        delete m_aiDecisionMaker;
+        m_aiDecisionMaker = nullptr;
     }
+    delete m_hunterBehavior;
+    m_hunterBehavior = nullptr;
+    delete m_survivorBehavior;
+    m_survivorBehavior = nullptr;
+
+    m_frameTimer.stop();
+    if (m_scene) m_scene->clear();
     m_player = nullptr;
     m_hunter = nullptr;
     m_aiSurvivors.clear();
-    m_ciphers.clear();
-    m_gates.clear();
+    m_cachedCiphers.clear();
+    m_cachedGates.clear();
 }
 
-// ---------- 简易 AI ----------
-void GameEngine::updateAI()
+// ==================== 动态音乐切换实现 ====================
+void GameEngine::updateDynamicMusic()
 {
-    // 监管者巡逻逻辑（简化：随机移动）
-    if (m_hunter && m_hunter->isEnabled() && !m_hunter->isStunned()) {
-        // 这里可以后续替换为完整的 HunterBehavior
-        // 暂时让监管者不动或简单随机移动
+    // 只在解码或逃脱阶段切换动态音乐
+    if (m_state != Decoding && m_state != Escape) return;
+    Hunter *hunter = m_hunter;
+    if (!hunter || hunter->isStunned()) {
+        // 监管者眩晕时强制回到普通背景音乐
+        AudioManager::instance()->playMusic(AudioManager::GameBGM);
+        return;
     }
 
-    // AI 求生者简单行为：朝着最近的密码机移动
-    for (auto *ai : m_aiSurvivors) {
-        if (!ai->isEnabled() || ai->isEliminated()) continue;
+    bool near = false;
+    bool chase = false;
 
-        // 找到最近未完成的密码机
-        CipherData *target = nullptr;
-        qreal minDist = 1e9;
-        for (auto &cipher : m_ciphers) {
-            if (!cipher.completed) {
-                qreal d = QLineF(ai->pos(), cipher.item->pos()).length();
-                if (d < minDist) {
-                    minDist = d;
-                    target = &cipher;
-                }
-            }
-        }
-        if (target) {
-            QPointF dir = target->item->pos() - ai->pos();
-            if (dir.x() > 0) ai->setMoveDirection(Direction::Right);
-            else if (dir.x() < 0) ai->setMoveDirection(Direction::Left);
-            else if (dir.y() > 0) ai->setMoveDirection(Direction::Down);
-            else if (dir.y() < 0) ai->setMoveDirection(Direction::Up);
-            else ai->setMoveDirection(Direction::None);
-        }
+    // 检查玩家
+    if (m_player && !m_player->isEliminated()) {
+        qreal dist = QLineF(m_player->pos(), hunter->pos()).length();
+        if (dist < 200.0) near = true;
+        // 玩家没有 isBeingChased 标志，依赖距离判断即可
+    }
+
+    // 检查所有 AI 求生者
+    for (AISurvivor *ai : m_aiSurvivors) {
+        if (ai->isEliminated()) continue;
+        qreal dist = QLineF(ai->pos(), hunter->pos()).length();
+        if (dist < 200.0) near = true;
+        if (ai->isBeingChased()) chase = true;
+    }
+
+    // 优先级：追击 > 靠近 > 正常
+    if (chase) {
+        AudioManager::instance()->playMusic(AudioManager::HunterChase);
+    } else if (near) {
+        AudioManager::instance()->playMusic(AudioManager::HunterNearby);
+    } else {
+        AudioManager::instance()->playMusic(AudioManager::GameBGM);
     }
 }

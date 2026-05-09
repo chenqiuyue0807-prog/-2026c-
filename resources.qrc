@@ -1,0 +1,43 @@
+<RCC>
+    <qresource prefix="/new/prefix1">
+        <file>images/background.png</file>
+        <file>images/lumain.png</file>
+        <file>images/yisheng.png</file>
+        <file>images/jixie.png</file>
+        <file>images/kongjun.png</file>
+        <file>images/men.png</file>
+        <file>images/mimaji.png</file>
+        <file>images/qiang.png</file>
+        <file>images/cao.png</file>
+        <file>images/gj.png</file>
+    </qresource>
+    <qresource prefix="/new/prefix2">
+        <file>images/hongh.png</file>
+        <file>images/hongz.png</file>
+        <file>images/hongzc.png</file>
+        <file>images/hongyc.png</file>
+        <file>images/jihou.png</file>
+        <file>images/jiyc.png</file>
+        <file>images/jiz.png</file>
+        <file>images/jizc.png</file>
+        <file>images/konhou.png</file>
+        <file>images/konyc.png</file>
+        <file>images/konz.png</file>
+        <file>images/konzc.png</file>
+        <file>images/yihou.png</file>
+        <file>images/yiyc.png</file>
+        <file>images/yiz.png</file>
+        <file>images/yizc.png</file>
+        <file>images/xhou.png</file>
+        <file>images/xyc.png</file>
+        <file>images/xz.png</file>
+        <file>images/xzc.png</file>
+    </qresource>
+    <qresource prefix="/new/prefix3">
+        <file>sound/jieshu.wav</file>
+        <file>sound/xiaoxin.wav</file>
+        <file>sound/youxi.wav</file>
+        <file>sound/zhu.wav</file>
+        <file>sound/zhuiji.wav</file>
+    </qresource>
+</RCC>

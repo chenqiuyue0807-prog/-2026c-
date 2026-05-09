@@ -1,5 +1,5 @@
 #include "GameScene.h"
-#include "Character.h"
+#include "entities/Character.h"
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPropertyAnimation>
@@ -10,77 +10,119 @@
 #include "entities/CipherMachine.h"
 #include "entities/Gate.h"
 
-// ---------- Obstacle 实现 ----------
-Obstacle::Obstacle(const QRectF &rect, Type type, QGraphicsItem *parent)
-    : QGraphicsRectItem(rect, parent), m_type(type)
-{
-    setFlag(QGraphicsItem::ItemIsSelectable, false);
-    setFlag(QGraphicsItem::ItemIsMovable, false);
-    QColor color;
-    switch (type) {
-    case Wall:  color = QColor(139, 69, 19); break;
-    case Box:   color = QColor(160, 82, 45); break;
-    case Board: color = QColor(205, 133, 63); break;
-    }
-    setBrush(QBrush(color));
-    setPen(QPen(Qt::black, 2));
-}
+void Bush::shake() { return; }
+void Bush::setContainsSurvivor(bool contains) { m_containsSurvivor = contains; }
 
-// ---------- Bush 实现 ----------
-Bush::Bush(const QRectF &rect, QGraphicsItem *parent)
-    : QObject(nullptr), QGraphicsRectItem(rect, parent), m_containsSurvivor(false)
-{
-    setFlag(QGraphicsItem::ItemIsSelectable, false);
-    setFlag(QGraphicsItem::ItemIsMovable, false);
-    setBrush(QBrush(QColor(34, 139, 34, 180)));
-    setPen(Qt::NoPen);
-}
-
-void Bush::shake()
-{
-    // 晃动动画（如需启用请确保 Bush 是 QObject 子类）
-    // 当前为空实现以避免编译错误
-}
-
-void Bush::setContainsSurvivor(bool contains)
-{
-    m_containsSurvivor = contains;
-}
-
-// ---------- GameScene 实现 ----------
 GameScene::GameScene(QObject *parent)
     : QGraphicsScene(parent), m_playerCharacter(nullptr)
 {
-    setSceneRect(0, 0, 1200, 800);
-    setBackgroundBrush(QColor(50, 80, 50));
+    setSceneRect(0, 0, 2400, 1800);
+    QPixmap bgPixmap(":/new/prefix1/images/lumain.png");
+    if (!bgPixmap.isNull()) {
+        setBackgroundBrush(QBrush(bgPixmap.scaled(2400, 1800, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
+    } else {
+        setBackgroundBrush(QColor(50, 80, 50));
+    }
 }
 
+// GameScene.cpp 的 createObstaclesAndBushes() 完整替换
 void GameScene::createObstaclesAndBushes()
 {
-    // 障碍物
-    addObstacle(QPointF(200, 150), QSizeF(80, 20), Obstacle::Wall);
-    addObstacle(QPointF(400, 200), QSizeF(20, 120), Obstacle::Wall);
-    addObstacle(QPointF(600, 100), QSizeF(100, 20), Obstacle::Wall);
-    addObstacle(QPointF(800, 300), QSizeF(20, 150), Obstacle::Wall);
-    addObstacle(QPointF(300, 500), QSizeF(150, 20), Obstacle::Wall);
-    addObstacle(QPointF(700, 600), QSizeF(80, 20), Obstacle::Wall);
-    addObstacle(QPointF(150, 650), QSizeF(20, 100), Obstacle::Wall);
-    addObstacle(QPointF(900, 500), QSizeF(20, 150), Obstacle::Wall);
-    addObstacle(QPointF(350, 350), QSizeF(40, 40), Obstacle::Box);
-    addObstacle(QPointF(750, 400), QSizeF(40, 40), Obstacle::Box);
-    addObstacle(QPointF(500, 650), QSizeF(40, 40), Obstacle::Box);
-    addObstacle(QPointF(250, 250), QSizeF(60, 15), Obstacle::Board);
-    addObstacle(QPointF(650, 250), QSizeF(60, 15), Obstacle::Board);
-    addObstacle(QPointF(450, 450), QSizeF(15, 60), Obstacle::Board);
+    // ================= 1. 墙壁：构建地图分区和走廊 =================
+    // 左上角“L”型房间（保留）
+    addObstacle(QPointF(150, 150), QSizeF(200, 20), Obstacle::Wall);  // 上横
+    addObstacle(QPointF(150, 150), QSizeF(20, 150), Obstacle::Wall);  // 左竖
+    addObstacle(QPointF(330, 200), QSizeF(20, 150), Obstacle::Wall);  // 右竖
 
-    // 草丛
-    addBush(QPointF(100, 100), QSizeF(80, 80));
-    addBush(QPointF(500, 150), QSizeF(100, 80));
-    addBush(QPointF(850, 200), QSizeF(90, 90));
-    addBush(QPointF(200, 450), QSizeF(100, 100));
-    addBush(QPointF(600, 500), QSizeF(120, 80));
-    addBush(QPointF(900, 650), QSizeF(80, 80));
-    addBush(QPointF(300, 700), QSizeF(100, 100));
+    // 左侧新增竖墙，形成走廊
+    addObstacle(QPointF(500, 300), QSizeF(20, 250), Obstacle::Wall);
+    addObstacle(QPointF(500, 600), QSizeF(180, 20), Obstacle::Wall);
+
+    // 中央区域（原回字形已删除）改为交错横墙
+    addObstacle(QPointF(750, 400), QSizeF(300, 20), Obstacle::Wall);
+    addObstacle(QPointF(800, 600), QSizeF(20, 300), Obstacle::Wall);
+    addObstacle(QPointF(1000, 700), QSizeF(300, 20), Obstacle::Wall);
+    addObstacle(QPointF(1200, 500), QSizeF(20, 250), Obstacle::Wall);
+
+    // 右侧“双横走廊”保留，但改成更多分段
+    addObstacle(QPointF(1500, 400), QSizeF(400, 20), Obstacle::Wall);
+    addObstacle(QPointF(1600, 600), QSizeF(20, 200), Obstacle::Wall);
+    addObstacle(QPointF(1800, 800), QSizeF(400, 20), Obstacle::Wall);
+
+    // 右侧下方新增长墙和隔断
+    addObstacle(QPointF(1500, 1100), QSizeF(300, 20), Obstacle::Wall);
+    addObstacle(QPointF(1700, 1000), QSizeF(20, 200), Obstacle::Wall);
+
+    // 左下方“U”型通道（保留）
+    addObstacle(QPointF(200, 1200), QSizeF(150, 20), Obstacle::Wall);
+    addObstacle(QPointF(200, 1200), QSizeF(20, 200), Obstacle::Wall);
+    addObstacle(QPointF(350, 1400), QSizeF(20, 200), Obstacle::Wall);
+
+    // 左下方新增L墙
+    addObstacle(QPointF(500, 1300), QSizeF(100, 20), Obstacle::Wall);
+    addObstacle(QPointF(600, 1200), QSizeF(20, 100), Obstacle::Wall);
+
+    // 右下角小隔间（保留）
+    addObstacle(QPointF(2000, 1400), QSizeF(200, 20), Obstacle::Wall);
+    addObstacle(QPointF(2000, 1400), QSizeF(20, 200), Obstacle::Wall);
+    addObstacle(QPointF(2180, 1500), QSizeF(20, 150), Obstacle::Wall);
+
+    // 顶部中央独立短墙（保留）
+    addObstacle(QPointF(1100, 150), QSizeF(200, 20), Obstacle::Wall);
+
+    // 底部中央长墙改为两条错开
+    addObstacle(QPointF(800, 1600), QSizeF(300, 20), Obstacle::Wall);
+    addObstacle(QPointF(1300, 1600), QSizeF(300, 20), Obstacle::Wall);
+
+    // 增加新墙：右上角隔断
+    addObstacle(QPointF(1900, 200), QSizeF(20, 150), Obstacle::Wall);
+    addObstacle(QPointF(1800, 200), QSizeF(150, 20), Obstacle::Wall);
+
+    // 增加新墙：左下角额外
+    addObstacle(QPointF(100, 1000), QSizeF(20, 200), Obstacle::Wall);
+    addObstacle(QPointF(150, 1000), QSizeF(100, 20), Obstacle::Wall);
+
+    // ================= 2. 箱子：散布在各处作为临时掩体 =================
+    addObstacle(QPointF(300, 400), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(650, 200), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(900, 300), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(1300, 350), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(1800, 500), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(2200, 700), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(1900, 1100), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(1400, 1300), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(800, 1400), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(400, 900), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(700, 1000), QSizeF(30, 30), Obstacle::Box);
+    addObstacle(QPointF(1600, 1400), QSizeF(30, 30), Obstacle::Box);
+
+    // ================= 3. 板区：半掩体 =================
+    addObstacle(QPointF(600, 500), QSizeF(50, 15), Obstacle::Board);
+    addObstacle(QPointF(1200, 900), QSizeF(15, 50), Obstacle::Board);
+    addObstacle(QPointF(2000, 600), QSizeF(50, 15), Obstacle::Board);
+    addObstacle(QPointF(1500, 1500), QSizeF(15, 50), Obstacle::Board);
+    addObstacle(QPointF(350, 1200), QSizeF(15, 50), Obstacle::Board);
+    addObstacle(QPointF(1800, 1300), QSizeF(50, 15), Obstacle::Board);
+
+    // ================= 4. 草丛：安全躲藏点（适当增加） =================
+    addBush(QPointF(700, 150), QSizeF(120, 120));
+    addBush(QPointF(1600, 700), QSizeF(130, 130));
+    addBush(QPointF(200, 900), QSizeF(100, 100));
+    addBush(QPointF(1200, 1200), QSizeF(140, 140));
+    addBush(QPointF(2200, 1300), QSizeF(130, 130));
+    addBush(QPointF(800, 800), QSizeF(120, 120));
+    addBush(QPointF(1800, 1600), QSizeF(110, 110));
+    addBush(QPointF(300, 1600), QSizeF(120, 120));
+    addBush(QPointF(1900, 200), QSizeF(130, 130));
+    addBush(QPointF(1400, 300), QSizeF(100, 100));
+    addBush(QPointF(500, 1300), QSizeF(120, 120));
+    addBush(QPointF(1000, 1600), QSizeF(110, 110));
+    addBush(QPointF(2100, 500), QSizeF(100, 100));
+    addBush(QPointF(1600, 1100), QSizeF(130, 130));
+    // 新增草丛
+    addBush(QPointF(50, 700), QSizeF(110, 110));
+    addBush(QPointF(1300, 700), QSizeF(100, 100));
+    addBush(QPointF(2200, 100), QSizeF(120, 120));
 }
 
 void GameScene::addObstacle(const QPointF &pos, const QSizeF &size, Obstacle::Type type)
@@ -139,10 +181,7 @@ Bush* GameScene::getBushAt(const QPointF &point, qreal maxDistance) const
     for (Bush *bush : m_bushes) {
         QPointF center = bush->sceneBoundingRect().center();
         qreal d = QLineF(point, center).length();
-        if (d < minDist) {
-            minDist = d;
-            closest = bush;
-        }
+        if (d < minDist) { minDist = d; closest = bush; }
     }
     return closest;
 }
@@ -176,8 +215,12 @@ void GameScene::setPlayerCharacter(Character *player)
 
 void GameScene::keyPressEvent(QKeyEvent *event)
 {
-    if (m_playerCharacter)
+    qDebug() << "KEY:" << event->key();   // 临时诊断
+    if (m_playerCharacter) {
         m_playerCharacter->handleKeyPress(event);
+        event->accept();     // 关键：阻止事件继续传播
+        return;
+    }
     QGraphicsScene::keyPressEvent(event);
 }
 
@@ -185,5 +228,4 @@ void GameScene::keyReleaseEvent(QKeyEvent *event)
 {
     if (m_playerCharacter)
         m_playerCharacter->handleKeyRelease(event);
-    QGraphicsScene::keyReleaseEvent(event);
 }
