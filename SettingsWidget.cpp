@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QApplication>
+#include "utils/AudioManager.h"
 
 SettingsWidget::SettingsWidget(QWidget *parent) : QWidget(parent), m_settings(new QSettings("MyGame", "Settings", this))
 {
@@ -66,6 +67,9 @@ void SettingsWidget::applySettings()
     m_settings->setValue("audio/sfx", m_sfxSlider->value());
     m_settings->setValue("display/fullscreen", m_fullscreenCheck->isChecked());
     m_settings->setValue("display/resolution", m_resolutionCombo->currentData().toSize());
+    // 通知音频管理器更新音量
+    AudioManager::instance()->setMasterVolume(m_masterSlider->value());
+    AudioManager::instance()->setBGMVolume(m_bgmSlider->value());
 }
 
 void SettingsWidget::loadSettings()

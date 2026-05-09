@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QFrame>
+#include <QPixmap>                // 新增
 
 CharacterSelectWidget::CharacterSelectWidget(QWidget *parent) : QWidget(parent), m_cardGroup(new QButtonGroup(this))
 {
@@ -33,7 +34,7 @@ void CharacterSelectWidget::setupUI()
     hunterFrame->setFixedSize(200, 200);
     hunterFrame->setStyleSheet("background:rgba(60,60,60,150);border:2px solid gray;border-radius:15px;");
     QVBoxLayout *hunterLayout = new QVBoxLayout(hunterFrame);
-    QLabel *hName = new QLabel("厂长 (监管者)", this); hName->setAlignment(Qt::AlignCenter); hName->setStyleSheet("color:white;font-size:16px;");
+    QLabel *hName = new QLabel("红夫人 (监管者)", this); hName->setAlignment(Qt::AlignCenter); hName->setStyleSheet("color:white;font-size:16px;");
     QLabel *hAI = new QLabel("AI 控制", this); hAI->setAlignment(Qt::AlignCenter); hAI->setStyleSheet("color:orange;");
     hunterLayout->addWidget(hName); hunterLayout->addWidget(hAI);
     QHBoxLayout *hRow = new QHBoxLayout; hRow->addStretch(); hRow->addWidget(hunterFrame); hRow->addStretch();
@@ -64,7 +65,24 @@ void CharacterSelectWidget::createCard(int id, const QString &name, const QStrin
     card->setCheckable(true);
     card->setStyleSheet(m_cardNormal);
     m_cardGroup->addButton(card, id);
+
     QVBoxLayout *lay = new QVBoxLayout(card);
+
+    // 添加角色图片
+    QLabel *imgLabel = new QLabel(card);
+    imgLabel->setAlignment(Qt::AlignCenter);
+    QString imgPath;
+    switch (id) {
+    case 0: imgPath = ":/new/prefix1/images/yisheng.png"; break;
+    case 1: imgPath = ":/new/prefix1/images/jixie.png"; break;
+    case 2: imgPath = ":/new/prefix1/images/kongjun.png"; break;
+    }
+    QPixmap pix(imgPath);
+    if (!pix.isNull()) {
+        imgLabel->setPixmap(pix.scaled(150, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    lay->addWidget(imgLabel, 0, Qt::AlignCenter);
+
     QLabel *nLabel = new QLabel(name, card); nLabel->setAlignment(Qt::AlignCenter); nLabel->setStyleSheet("font-size:18px;font-weight:bold;");
     QLabel *dLabel = new QLabel(desc, card); dLabel->setWordWrap(true); dLabel->setStyleSheet("color:#ccc;");
     lay->addWidget(nLabel); lay->addWidget(dLabel); lay->addStretch();
