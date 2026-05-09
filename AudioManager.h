@@ -1,33 +1,45 @@
 #ifndef AUDIOMANAGER_H
 #define AUDIOMANAGER_H
 
-#include <QString>
+#include <QObject>
+#include <QSoundEffect>
 
-class AudioManager
+class AudioManager : public QObject
 {
+    Q_OBJECT
+
 public:
-    enum SoundEffect { Footstep, Decode, Attack, Skill, Rescue, GateOpen, Hit, CipherComplete, Escape };
+    enum MusicTrack {
+        MainMenu,
+        GameBGM,
+        HunterNearby,
+        HunterChase,
+        GameOver
+    };
 
-    static AudioManager* instance() {
-        static AudioManager m;
-        return &m;
-    }
+    static AudioManager* instance();
+    void initialize();
+    void playMusic(MusicTrack track);
+    void stopMusic();
 
-    void initialize() {}
-    void playBGM(const QString& = QString()) {}
-    void stopBGM() {}
-    void playSound(SoundEffect) {}
-    void setMasterVolume(int) {}
-    void setBgmVolume(int) {}
-    void setSfxVolume(int) {}
-    int masterVolume() const { return 80; }
-    int bgmVolume() const { return 70; }
-    int sfxVolume() const { return 90; }
-    void loadVolumes() {}
-    void saveVolumes() {}
+    void setMasterVolume(int vol);    // 0-100
+    void setBGMVolume(int vol);       // 0-100
+    int masterVolume() const { return m_masterVolume; }
+    int bgmVolume() const { return m_bgmVolume; }
+
+    void loadVolumes();
+    void saveVolumes();
 
 private:
-    AudioManager() = default;
+    explicit AudioManager(QObject *parent = nullptr);
+    ~AudioManager() override;
+
+    QString musicPath(MusicTrack track) const;
+
+    QSoundEffect *m_bgmEffect = nullptr;
+    int m_masterVolume = 80;
+    int m_bgmVolume = 70;
+    MusicTrack m_currentTrack = MainMenu;
 };
 
-#endif
+#endif // AUDIOMANAGER_H
